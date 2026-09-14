@@ -32,3 +32,7 @@ npm run test:live
 ```
 
 The live test makes one small DeepSeek request in a temporary Git repository and removes the temporary worktree afterward.
+
+## Routing expectation
+
+Delegation is intended for independent implementation and review value, not token savings. A controlled benchmark found higher combined Codex + DeepSeek token use than direct Codex execution across small, medium, and large tasks. Prefer direct execution when minimizing total tokens or latency is the primary goal; delegate when the extra implementation perspective justifies the coordination overhead. See the repository-level benchmark report for the measured results and limitations.

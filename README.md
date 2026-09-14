@@ -114,6 +114,14 @@ Use $deepseek-coding-delegation to delegate this implementation and review the r
 
 Codex selects the relevant repository instructions, passes bounded `scope_paths`, task-specific `required_reads`, and compact `critical_constraints`, then independently reviews the resulting diff and tests. Large rule documents can be limited to named sections instead of being copied into the prompt.
 
+## Token and latency expectations
+
+Delegation is a quality and independent-implementation tool, not a token-saving shortcut. In a controlled 27-case synthetic benchmark, the optimized routing policy consumed more combined Codex + DeepSeek tokens than direct Codex execution at every task size. It was cheaper than forced delegation for small and medium tasks, but not for large tasks.
+
+Use direct execution when minimizing total tokens or latency is the primary goal. Delegate when an independent implementation pass, unfamiliar multi-file discovery, or a bounded second perspective is worth the controller and review overhead.
+
+See [the benchmark report](./docs/token-routing-benchmark-2026-09-14.md) for methodology, medians, failures, and limitations.
+
 ## Safety model
 
 - Codex owns scope, authorization, business decisions, review, verification, and goal completion.
