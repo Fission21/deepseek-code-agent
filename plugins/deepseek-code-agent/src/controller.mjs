@@ -14,14 +14,18 @@ const WORKTREE_PREFIX = "deepseek-code-agent-";
 const MAX_WAIT_MS = 55_000;
 const POLL_MS = 600;
 const MAX_PART_TEXT = 20_000;
+const MAX_REPORT_CHARS = 3000;
+const REPORT_TRUNCATION_MARKER =
+  "\n[truncated; call ds_inspect_agent with detail=full to read the complete report]";
+const CURSOR_REVISION_PATTERN = /^[0-9a-f]{8,64}$/i;
 const INSTRUCTION_FILE_NAMES = ["AGENTS.override.md", "AGENTS.md"];
 
-const WORKER_SYSTEM_PROMPT = `You are the implementation worker supervised by Codex.
+export const WORKER_SYSTEM_PROMPT = `You are the implementation worker supervised by Codex.
 Before editing, read every file in the controller-provided instruction manifest and follow it. Do not scan unrelated policy documents unless the task or a listed instruction routes you to them.
 Work only on the assigned objective and scope. Treat controller-provided critical constraints as non-negotiable, while the original repository instruction files remain authoritative.
 Do not commit, push, merge, deploy, modify production data, expose credentials, or discard unrelated changes.
-Inspect the real call chain, implement the requested code, and run proportionate checks.
-In the final response acknowledge the instruction manifest paths and hashes, then list changed files, design choices, commands actually run with results, and remaining risks.`;
+Own high-volume discovery, implementation, tests, routine fixes, documentation and evidence preparation within scope; do not narrate each step back to the controller. Make routine implementation decisions independently. Escalate blocking consequential choices with options, tradeoffs, your recommendation and evidence so the queen can decide.
+Finish with a handoff of at most 1500 characters that states the outcome, changed files, the checks actually run with results, remaining risks, and the instruction manifest acknowledgement (path, sha256, read scope) for every listed file.`;
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -308,30 +312,397 @@ function compactPart(part) {
   return null;
 }
 
-export function compactMessages(messages, afterMessageID = null, limit = 20) {
-  if (!Array.isArray(messages)) return { messages: [], cursor: null };
-  let selected = messages;
-  if (afterMessageID) {
-    const index = messages.findIndex((message) => message?.info?.id === afterMessageID);
-    if (index >= 0) selected = messages.slice(index + 1);
+function errorFingerprint(error) {
+  if (error === null || error === undefined) return null;
+  if (typeof error === "string") return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
   }
-  selected = selected.slice(-limit);
-  return {
-    messages: selected.map((message) => {
-      const info = message.info ?? {};
-      return {
-        message_id: info.id,
-        role: info.role,
-        created_at: info.time?.created,
-        completed_at: info.time?.completed,
-        error: info.error ?? null,
-        cost: info.cost,
-        tokens: info.tokens,
-        parts: (message.parts ?? []).map(compactPart).filter(Boolean),
-      };
+}
+
+export function summarizeError(error) {
+  if (error === null || error === undefined) return null;
+  if (typeof error === "string") return { message: error };
+  const name = typeof error.name === "string" && error.name ? error.name : null;
+  let message = typeof error.message === "string" && error.message ? error.message : null;
+  if (!message && error.data && typeof error.data.message === "string" && error.data.message) {
+    message = error.data.message;
+  }
+  const summary = { message: message ?? "Assistant turn failed" };
+  if (name) summary.name = name;
+  return summary;
+}
+
+export function messageRevision(message) {
+  const info = message?.info ?? {};
+  const parts = Array.isArray(message?.parts) ? message.parts : [];
+  const signature = {
+    id: info.id ?? null,
+    role: info.role ?? null,
+    completed: info.time?.completed ?? null,
+    finish: info.finish ?? null,
+    error: errorFingerprint(info.error),
+    parts: parts.map((part) => {
+      if (!part || typeof part !== "object") return ["unknown"];
+      if (part.type === "text") return ["text", part.text ?? ""];
+      if (part.type === "tool") {
+        return ["tool", part.tool ?? null, part.state?.status ?? null, part.state?.title ?? null];
+      }
+      if (part.type === "step-finish") {
+        return [
+          "step-finish",
+          part.reason ?? null,
+          part.cost ?? null,
+          part.tokens ? JSON.stringify(part.tokens) : null,
+        ];
+      }
+      if (part.type === "patch") {
+        return ["patch", part.hash ?? null, JSON.stringify(part.files ?? [])];
+      }
+      return [part.type ?? "unknown"];
     }),
+  };
+  return createHash("sha256").update(JSON.stringify(signature)).digest("hex").slice(0, 24);
+}
+
+export function parseCursor(cursor) {
+  if (cursor === null || cursor === undefined) return null;
+  if (typeof cursor === "object") {
+    const messageID = cursor.message_id ?? cursor.messageID ?? cursor.id;
+    if (typeof messageID !== "string" || !messageID) return null;
+    const revision =
+      typeof cursor.revision === "string" && CURSOR_REVISION_PATTERN.test(cursor.revision)
+        ? cursor.revision.toLowerCase()
+        : null;
+    return { message_id: messageID, revision };
+  }
+  if (typeof cursor !== "string" || !cursor) return null;
+  const match = cursor.match(/^(.*)@([0-9a-f]{8,64})$/i);
+  if (match && match[1]) return { message_id: match[1], revision: match[2].toLowerCase() };
+  return { message_id: cursor, revision: null };
+}
+
+export function encodeCursor(cursor) {
+  const parsed = parseCursor(cursor);
+  if (!parsed) return null;
+  return parsed.revision ? `${parsed.message_id}@${parsed.revision}` : parsed.message_id;
+}
+
+export function selectMessages(messages, cursor = null, limit = null) {
+  if (!Array.isArray(messages)) {
+    return { messages: [], selected: [], cursor: null, previous: null, changed: false };
+  }
+  const parsed = parseCursor(cursor);
+  let selected = messages;
+  if (parsed) {
+    const index = messages.findIndex((message) => message?.info?.id === parsed.message_id);
+    if (index >= 0) {
+      if (parsed.revision === null) {
+        // Legacy message-ID cursors have no revision; keep the historical behavior
+        // of treating the cursor message as already consumed.
+        selected = messages.slice(index + 1);
+      } else {
+        const revision = messageRevision(messages[index]);
+        selected = revision === parsed.revision ? messages.slice(index + 1) : messages.slice(index);
+      }
+    }
+  }
+  const latest = messages.at(-1);
+  const latestID = latest?.info?.id ?? null;
+  return {
+    messages: limit === null || limit === undefined ? selected : selected.slice(-limit),
+    selected,
+    cursor: latestID ? { message_id: latestID, revision: messageRevision(latest) } : null,
+    previous: parsed,
+    changed: selected.length > 0,
+  };
+}
+
+function isToolCallsStep(message) {
+  if (typeof message?.info?.finish === "string" && message.info.finish.toLowerCase().includes("tool")) return true;
+  const parts = Array.isArray(message?.parts) ? message.parts : [];
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const part = parts[index];
+    if (part?.type !== "step-finish") continue;
+    const reason = typeof part.reason === "string" ? part.reason.toLowerCase() : "";
+    return reason.includes("tool");
+  }
+  return false;
+}
+
+export function turnOutcome(messages) {
+  const last = Array.isArray(messages) ? messages.at(-1) : null;
+  if (!last) return { status: "empty", error: null };
+  const info = last.info ?? {};
+  if (info.role !== "assistant") return { status: "awaiting_assistant", error: null };
+  if (info.error) return { status: "failed", error: summarizeError(info.error) };
+  if (info.time?.completed === undefined || info.time?.completed === null) {
+    return { status: "streaming", error: null };
+  }
+  if (isToolCallsStep(last)) return { status: "tool_calls", error: null };
+  return { status: "completed", error: null };
+}
+
+export function finalReportFrom(messages) {
+  const last = Array.isArray(messages) ? messages.at(-1) : null;
+  if (!last || last.info?.role !== "assistant") return null;
+  if (last.info.error) return null;
+  if (last.info.time?.completed === undefined || last.info.time?.completed === null) return null;
+  if (isToolCallsStep(last)) return null;
+  const text = (last.parts ?? [])
+    .filter((part) => part?.type === "text" && typeof part.text === "string")
+    .map((part) => part.text)
+    .join("\n")
+    .trim();
+  return text || null;
+}
+
+export function boundReport(text, limit = MAX_REPORT_CHARS) {
+  if (typeof text !== "string" || !text.trim()) return { text: null, truncated: false };
+  const trimmed = text.trim();
+  if (trimmed.length <= limit) return { text: trimmed, truncated: false };
+  const available = Math.max(0, limit - REPORT_TRUNCATION_MARKER.length);
+  return { text: `${trimmed.slice(0, available)}${REPORT_TRUNCATION_MARKER}`, truncated: true };
+}
+
+function finiteNumberOrNull(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function emptyTokenFields() {
+  return {
+    input: null,
+    output: null,
+    reasoning: null,
+    cache_read: null,
+    cache_write: null,
+    total: null,
+  };
+}
+
+function readTokenFields(container) {
+  if (!container || typeof container !== "object") return null;
+  const cache = container.cache && typeof container.cache === "object" ? container.cache : {};
+  const fields = {
+    input: finiteNumberOrNull(container.input),
+    output: finiteNumberOrNull(container.output),
+    reasoning: finiteNumberOrNull(container.reasoning),
+    cache_read: finiteNumberOrNull(cache.read ?? container.cache_read),
+    cache_write: finiteNumberOrNull(cache.write ?? container.cache_write),
+    total: finiteNumberOrNull(container.total),
+  };
+  return Object.values(fields).some((value) => value !== null) ? fields : null;
+}
+
+function addTokenFields(total, fields) {
+  for (const key of Object.keys(total)) {
+    if (fields[key] !== null && fields[key] !== undefined) {
+      total[key] = (total[key] ?? 0) + fields[key];
+    }
+  }
+}
+
+function stepFinishUsage(parts) {
+  let cost = null;
+  let tokens = null;
+  for (const part of parts ?? []) {
+    if (part?.type !== "step-finish") continue;
+    const partCost = finiteNumberOrNull(part.cost);
+    if (partCost !== null) cost = (cost ?? 0) + partCost;
+    const fields = readTokenFields(part.tokens);
+    if (fields) {
+      tokens ??= emptyTokenFields();
+      addTokenFields(tokens, fields);
+    }
+  }
+  return { cost, tokens };
+}
+
+export function aggregateUsage(messages) {
+  const tokens = emptyTokenFields();
+  let cost = 0;
+  let costSeen = false;
+  let tokensSeen = false;
+  let fallbackUsed = false;
+  let assistantMessages = 0;
+  let messagesWithCost = 0;
+  let messagesWithTokens = 0;
+  const tokenFieldMessages = Object.fromEntries(Object.keys(tokens).map(key => [key, 0]));
+
+  for (const message of Array.isArray(messages) ? messages : []) {
+    if (message?.info?.role !== "assistant") continue;
+    assistantMessages += 1;
+    const info = message.info;
+    let messageCost = finiteNumberOrNull(info.cost);
+    let messageTokens = readTokenFields(info.tokens);
+    if (messageCost === null || messageTokens === null) {
+      // Step-finish parts repeat message-level totals, so they are only a fallback
+      // when the message itself carries no usage. This avoids double counting.
+      const fallback = stepFinishUsage(message.parts);
+      if (messageCost === null && fallback.cost !== null) {
+        messageCost = fallback.cost;
+        fallbackUsed = true;
+      }
+      if (messageTokens === null && fallback.tokens !== null) {
+        messageTokens = fallback.tokens;
+        fallbackUsed = true;
+      }
+    }
+    if (messageCost !== null) {
+      cost += messageCost;
+      costSeen = true;
+      messagesWithCost += 1;
+    }
+    if (messageTokens !== null) {
+      addTokenFields(tokens, messageTokens);
+      for (const [key, value] of Object.entries(messageTokens)) {
+        if (value !== null) tokenFieldMessages[key] += 1;
+      }
+      tokensSeen = true;
+      messagesWithTokens += 1;
+    }
+  }
+
+  const notes = [];
+  if (assistantMessages === 0) notes.push("no assistant messages yet");
+  if (messagesWithCost < assistantMessages) {
+    notes.push(
+      `cost unavailable for ${assistantMessages - messagesWithCost} of ${assistantMessages} assistant messages`,
+    );
+  }
+  if (messagesWithTokens < assistantMessages) {
+    notes.push(
+      `token usage unavailable for ${assistantMessages - messagesWithTokens} of ${assistantMessages} assistant messages`,
+    );
+  }
+  if (tokensSeen) {
+    const missingFields = Object.entries(tokenFieldMessages)
+      .filter(([, count]) => count < assistantMessages)
+      .map(([key]) => key);
+    if (missingFields.length) notes.push(`token fields unavailable or partial: ${missingFields.join(", ")}`);
+  }
+
+  return {
+    source: fallbackUsed
+      ? "assistant_message_info_plus_step_finish_fallback"
+      : "assistant_message_info",
+    assistant_messages: assistantMessages,
+    messages_with_cost: messagesWithCost,
+    messages_with_tokens: messagesWithTokens,
+    token_field_messages: tokenFieldMessages,
+    complete:
+      assistantMessages > 0 &&
+      messagesWithCost === assistantMessages &&
+      messagesWithTokens === assistantMessages &&
+      Object.values(tokenFieldMessages).every(count => count === assistantMessages) &&
+      messages.every(message => message?.info?.role !== "assistant" || message.info.time?.completed != null),
+    cost_available: costSeen,
+    cost_usd: costSeen ? cost : null,
+    tokens_available: tokensSeen,
+    tokens: tokensSeen ? tokens : null,
+    note: notes.length ? notes.join("; ") : null,
+  };
+}
+
+function bridgeStateFor({ rawStatusType, pendingCount, queuedMessages, changed, outcome }) {
+  if (pendingCount > 0) return "needs_attention";
+  if (rawStatusType === "busy") return queuedMessages > 0 ? "queued" : "running";
+  if (rawStatusType === "retry") return "retry";
+  if (rawStatusType === undefined || rawStatusType === null || rawStatusType === "idle") {
+    if (changed && outcome.status === "failed") return "failed";
+    if (changed && outcome.status === "completed") return "completed";
+    if (queuedMessages > 0) return "queued";
+    return "idle";
+  }
+  return rawStatusType;
+}
+
+function messageSummary(message) {
+  const info = message?.info ?? {};
+  return {
+    message_id: info.id,
+    role: info.role,
+    created_at: info.time?.created,
+    completed_at: info.time?.completed,
+    error: info.error ?? null,
+    cost: info.cost,
+    tokens: info.tokens,
+    parts: (message?.parts ?? []).map(compactPart).filter(Boolean),
+  };
+}
+
+export function compactMessages(messages, afterMessageID = null, limit = 20) {
+  const selection = selectMessages(messages, afterMessageID, limit);
+  return {
+    messages: selection.messages.map(messageSummary),
     cursor: latestMessageID(messages),
   };
+}
+
+function payloadCursor(data) {
+  const surfaced = data.bridgeState === "completed" || data.bridgeState === "failed";
+  const holdsFinal = !surfaced && (data.outcome.status === "completed" || data.outcome.status === "failed");
+  return encodeCursor(holdsFinal ? data.selection.previous : data.selection.cursor);
+}
+
+function compactPayload(data) {
+  const report =
+    data.bridgeState === "completed"
+      ? boundReport(finalReportFrom(data.messages))
+      : { text: null, truncated: false };
+  const payload = {
+    agent_id: data.agentID,
+    detail: "compact",
+    state: data.bridgeState,
+    cursor: payloadCursor(data),
+    queued_messages: data.queuedMessages,
+    pending: data.pending,
+    final_report: report.text,
+    report_truncated: report.truncated,
+  };
+  if (data.bridgeState === "completed" || data.bridgeState === "failed") {
+    payload.usage = aggregateUsage(data.messages);
+    payload.worktree = data.state.directory;
+    payload.workspace_mode = data.state.workspace_mode;
+  }
+  if (report.truncated) {
+    payload.report_hint =
+      "Call ds_inspect_agent with detail=full (omit the cursor) to read the complete report.";
+  }
+  if (data.bridgeState === "failed" && data.outcome.error) payload.error = data.outcome.error;
+  return payload;
+}
+
+function fullPayload(data, messageLimit = 20) {
+  const limit = boundedInteger(messageLimit, 20, 1, 100);
+  return {
+    agent_id: data.agentID,
+    detail: "full",
+    state: data.bridgeState,
+    opencode_status: data.rawStatus,
+    cursor: payloadCursor(data),
+    messages: data.selection.messages.slice(-limit).map(messageSummary),
+    queued_messages: data.queuedMessages,
+    pending: data.pending,
+    usage: aggregateUsage(data.messages),
+    final_report: data.bridgeState === "completed" ? finalReportFrom(data.messages) : null,
+    worktree: data.state.directory,
+    workspace_mode: data.state.workspace_mode,
+    scope_paths: data.state.scope_paths ?? [],
+    instruction_manifest: data.state.instruction_manifest ?? { files: [], total_bytes: 0 },
+  };
+}
+
+function cursorBeforeAssistantMessages(messages) {
+  if (!Array.isArray(messages)) return null;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const info = messages[index]?.info;
+    if (!info?.id || info.role === "assistant") continue;
+    return { message_id: info.id, revision: messageRevision(messages[index]) };
+  }
+  return null;
 }
 
 async function runCommand(command, args, options = {}) {
@@ -590,18 +961,20 @@ export class DeepSeekController {
     }
   }
 
-  async messages(state, limit = 100) {
+  async messages(state) {
     return await this.request("GET", `/session/${state.agent_id}/message`, {
       directory: state.directory,
       body: undefined,
-    }).then((messages) => (Array.isArray(messages) ? messages.slice(-limit) : []));
+    }).then((messages) => (Array.isArray(messages) ? messages : []));
   }
 
   async rawStatus(state) {
     const statuses = await this.request("GET", "/session/status", {
       directory: state.directory,
     });
-    return statuses?.[state.agent_id] ?? { type: "idle" };
+    const status = statuses?.[state.agent_id];
+    if (!status || typeof status !== "object") return { type: "idle" };
+    return { ...status, type: status.type ?? "idle" };
   }
 
   async pending(state) {
@@ -748,7 +1121,7 @@ export class DeepSeekController {
     return {
       agent_id: state.agent_id,
       state: "running",
-      cursor: latestMessageID(messages),
+      cursor: encodeCursor(cursorBeforeAssistantMessages(messages)),
       workspace_mode,
       worktree: state.directory,
       source_root: state.source_root,
@@ -759,7 +1132,7 @@ export class DeepSeekController {
     };
   }
 
-  async snapshot(agentID, afterMessageID = null, messageLimit = 20) {
+  async collect(agentID, cursor) {
     const state = await this.readState(agentID);
     const [rawStatus, pending, messages, queuedMessages] = await Promise.all([
       this.rawStatus(state),
@@ -767,24 +1140,36 @@ export class DeepSeekController {
       this.messages(state),
       this.queueCount(agentID),
     ]);
-    const compact = compactMessages(messages, afterMessageID, messageLimit);
-    let bridgeState = rawStatus.type === "busy" ? "running" : rawStatus.type;
-    if (pending.permissions.length || pending.questions.length) bridgeState = "needs_attention";
-    else if (queuedMessages > 0) bridgeState = "queued";
-    else if (rawStatus.type === "idle" && compact.messages.length > 0) bridgeState = "completed";
+    const selection = selectMessages(messages, cursor, null);
+    const outcome = turnOutcome(messages);
+    const pendingCount = pending.permissions.length + pending.questions.length;
+    const bridgeState = bridgeStateFor({
+      rawStatusType: rawStatus?.type ?? "idle",
+      pendingCount,
+      queuedMessages,
+      changed: selection.changed,
+      outcome,
+    });
     return {
-      agent_id: agentID,
-      state: bridgeState,
-      opencode_status: rawStatus,
-      cursor: compact.cursor,
-      messages: compact.messages,
-      queued_messages: queuedMessages,
+      agentID,
+      state,
+      rawStatus,
       pending,
-      worktree: state.directory,
-      workspace_mode: state.workspace_mode,
-      scope_paths: state.scope_paths ?? [],
-      instruction_manifest: state.instruction_manifest ?? { files: [], total_bytes: 0 },
+      messages,
+      queuedMessages,
+      selection,
+      outcome,
+      bridgeState,
     };
+  }
+
+  renderPayload(data, detail, messageLimit) {
+    return detail === "full" ? fullPayload(data, messageLimit) : compactPayload(data);
+  }
+
+  async snapshot(agentID, afterMessageID = null, messageLimit = 20) {
+    const data = await this.collect(agentID, afterMessageID);
+    return fullPayload(data, messageLimit);
   }
 
   async sendMessage({ agent_id, message, queue_if_busy = true }) {
@@ -806,25 +1191,29 @@ export class DeepSeekController {
     return { agent_id, state: "running", queued_messages: await this.queueCount(agent_id) };
   }
 
-  async waitAgent({ agent_id, cursor = null, timeout_ms = 30_000 }) {
+  async waitAgent({ agent_id, cursor = null, timeout_ms = 30_000, detail = "compact" }) {
     const timeout = boundedInteger(timeout_ms, 30_000, 0, MAX_WAIT_MS);
     const deadline = Date.now() + timeout;
+    const mode = detail === "full" ? "full" : "compact";
     while (true) {
-      const state = await this.readState(agent_id);
-      const rawStatus = await this.rawStatus(state);
-      const pending = await this.pending(state);
-      if (pending.permissions.length || pending.questions.length) {
-        return await this.snapshot(agent_id, cursor);
+      const data = await this.collect(agent_id, cursor);
+      if (data.bridgeState === "needs_attention") {
+        return this.renderPayload(data, mode);
       }
-      if (rawStatus.type === "idle" && (await this.queueCount(agent_id)) > 0) {
-        await this.flushOne(state);
-      } else {
-        const result = await this.snapshot(agent_id, cursor);
-        if (result.state === "completed" || result.state === "retry") return result;
+      if (data.rawStatus?.type === "idle" && data.queuedMessages > 0) {
+        await this.flushOne(data.state);
+      } else if (
+        data.bridgeState === "completed" ||
+        data.bridgeState === "retry" ||
+        data.bridgeState === "failed"
+      ) {
+        return this.renderPayload(data, mode);
       }
       if (Date.now() >= deadline) {
-        const result = await this.snapshot(agent_id, cursor);
-        return { ...result, state: "timed_out" };
+        const final = await this.collect(agent_id, cursor);
+        const terminal = new Set(["completed", "retry", "failed", "needs_attention"]);
+        if (terminal.has(final.bridgeState)) return this.renderPayload(final, mode);
+        return { ...this.renderPayload(final, mode), state: "timed_out" };
       }
       await delay(Math.min(POLL_MS, Math.max(1, deadline - Date.now())));
     }
@@ -835,16 +1224,14 @@ export class DeepSeekController {
     cursor = null,
     message_limit = 20,
     include_diff = false,
+    detail = "compact",
   }) {
-    const result = await this.snapshot(
-      agent_id,
-      cursor,
-      boundedInteger(message_limit, 20, 1, 100),
-    );
+    const data = await this.collect(agent_id, cursor);
+    const mode = detail === "full" ? "full" : "compact";
+    const result = this.renderPayload(data, mode, boundedInteger(message_limit, 20, 1, 100));
     if (include_diff) {
-      const state = await this.readState(agent_id);
       result.diff = await this.request("GET", `/session/${agent_id}/diff`, {
-        directory: state.directory,
+        directory: data.state.directory,
       });
     }
     return result;
@@ -872,7 +1259,7 @@ export class DeepSeekController {
       agent_id: child.agent_id,
       parent_agent_id: agent_id,
       state: "completed",
-      cursor: latestMessageID(await this.messages(child)),
+      cursor: encodeCursor(selectMessages(await this.messages(child), null).cursor),
       worktree: child.directory,
       warning: "The fork shares the parent's filesystem. Run parent and child sequentially.",
     };

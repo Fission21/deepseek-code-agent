@@ -55,11 +55,7 @@ try {
   if (result?.state !== "completed") {
     throw new Error(`Live smoke did not complete: ${JSON.stringify(result)}`);
   }
-  const text = result.messages
-    .flatMap((message) => message.parts)
-    .filter((part) => part.type === "text")
-    .map((part) => part.text)
-    .join("\n");
+  const text = result.final_report ?? "";
   if (!text.includes("BRIDGE_READY")) {
     throw new Error(`Unexpected live response: ${text}`);
   }

@@ -1,0 +1,27 @@
+{
+  "measurement": "serialized_payload_size_not_model_tokens",
+  "source": "supplied_transcript",
+  "assistant_messages": 71,
+  "legacy": {
+    "characters": 26688,
+    "utf8_bytes": 26690
+  },
+  "compact": {
+    "characters": 3301,
+    "utf8_bytes": 3303
+  },
+  "character_reduction_percent": 87.63,
+  "unchanged_compact": {
+    "characters": 284,
+    "utf8_bytes": 284
+  },
+  "full_diagnostics": {
+    "characters": 29701,
+    "utf8_bytes": 29705
+  },
+  "report_truncated": false,
+  "note": "Does not measure queen tokens, reasoning, tool-call overhead, review effort, or end-to-end quality.",
+  "observed_on": "2026-09-14",
+  "task": "DS implementation and correction of compact controller responses",
+  "baseline_commit": "cc63593cfda75ea23dc372fd2a4333b0ff89d507"
+}

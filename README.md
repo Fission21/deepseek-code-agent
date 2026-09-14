@@ -114,13 +114,15 @@ Use $deepseek-coding-delegation to delegate this implementation and review the r
 
 Codex selects the relevant repository instructions, passes bounded `scope_paths`, task-specific `required_reads`, and compact `critical_constraints`, then independently reviews the resulting diff and tests. Large rule documents can be limited to named sections instead of being copied into the prompt.
 
-## Token and latency expectations
+## Queen token efficiency
 
-Delegation is a quality and independent-implementation tool, not a token-saving shortcut. In a controlled 27-case synthetic benchmark, the optimized routing policy consumed more combined Codex + DeepSeek tokens than direct Codex execution at every task size. It was cheaper than forced delegation for small and medium tasks, but not for large tasks.
+The default workflow reserves **queen (Codex) judgment** for intent, consequential design choices, uncertain diagnoses, risk-focused review and acceptance. DeepSeek handles high-volume discovery, editing, tests, routine fixes, documentation and evidence preparation within scope. Queen token savings should come from offloading labor while preserving quality. Delegate a coherent unit of work and reuse its session for corrections. Tiny known edits can still cost less to do directly.
 
-Use direct execution when minimizing total tokens or latency is the primary goal. Delegate when an independent implementation pass, unfamiliar multi-file discovery, or a bounded second perspective is worth the controller and review overhead.
+`ds_wait_agent` and `ds_inspect_agent` default to compact responses: status, attention requests, cumulative worker usage and a bounded final handoff. Task echoes, intermediate tool logs and repeated instruction manifests stay out of the queen's normal context. Use `detail="full"` for diagnosis or omitted evidence and `include_diff=true` when the diff is needed. Save the spawn manifest once and reuse returned cursors.
 
-See [the benchmark report](./docs/token-routing-benchmark-2026-09-14.md) for methodology, medians, failures, and limitations.
+Smaller tool responses are a measurable transport improvement, **not proof of end-to-end token savings**. The bridge cannot read the queen's usage. Compare matched direct/delegated tasks using actual queen usage, include failed attempts and review/correction turns, and keep worker tokens separate. See [the queen benchmark protocol](./docs/queen-token-efficiency.md).
+
+The [earlier 27-result synthetic benchmark](./docs/token-routing-benchmark-2026-09-14.md) measured combined Codex + DeepSeek tokens and found delegation more expensive at every task size. Those results remain valid for that setup; they do not establish the queen-only savings of this version. Combined tokens and latency may still increase.
 
 ## Safety model
 

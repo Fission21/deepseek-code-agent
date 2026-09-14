@@ -1,49 +1,36 @@
 ---
 name: deepseek-coding-delegation
-description: "Delegate non-trivial bounded implementation work to the stateful DeepSeek coding agent while Codex remains responsible for scope, review, corrections, and verification. Use when a coding task or active /goal has enough implementation work to outweigh delegation overhead. Route tiny edits directly unless the user explicitly requires a DeepSeek model call."
+description: Keep the queen (Codex) on quality-critical engineering decisions while DeepSeek V4.1 Flash handles bounded discovery, implementation, tests, routine fixes and evidence preparation. Use for coding tasks, coding goals and their supporting engineering work; handle tiny known edits directly.
 ---
 
 # DeepSeek Coding Delegation
 
-Use the `ds_*` MCP tools to treat DeepSeek V4.1 Flash Max as the implementation worker. Codex remains the controller: understand the request, define scope, inspect the result, request corrections, and run independent verification before reporting completion.
+Use the queen where its judgment most affects quality: intent, acceptance criteria, architecture and consequential tradeoffs, uncertain failure diagnosis, risk-focused review and final acceptance. DeepSeek is the worker: own high-volume investigation, implementation and evidence preparation within the agreed bounds. The objective is to preserve the queen’s capability while offloading labor, not to minimize queen involvement at the expense of quality. Combined tokens and latency can increase; do not promise measured savings without a comparable baseline.
 
-## When to delegate
+## Divide judgment from labor
 
-- Treat delegation as a quality and independent-implementation mechanism, not as a token-saving mechanism. Controlled benchmark results show higher combined Codex + DeepSeek token use than direct execution across small, medium, and large tasks.
-- Work directly when minimizing total tokens or latency is the primary goal.
-- Work directly when the expected change is one self-contained function or at most about 30 lines in one file, needs no unfamiliar repository discovery, and has a trivial focused check.
-- Delegate a bounded implementation unit when it spans multiple behaviors or files, needs unfamiliar repository discovery, benefits from an independent implementation pass, or is an active coding `/goal` with enough work to amortize controller and review round trips.
-- Prefer one DeepSeek worker. Do not also create a Codex model subagent unless the user explicitly asks for another model.
-- Do not delegate analysis-only, review-only, status, or explanation requests unless implementation is also requested.
+- Queen: decide what is correct, which constraints matter, consequential design choices and whether the evidence supports acceptance. Spend attention on unresolved uncertainty and risky changes.
+- DeepSeek: search files, trace calls, inventory dependencies, compare existing patterns, edit code and docs, add/run relevant tests, fix known failures, reduce logs and prepare a diff/evidence summary. Delegate these supporting tasks even when their output is investigation rather than a patch.
+- For a blocking design/business choice, ask DeepSeek for the decision needed, options, tradeoffs and its recommendation, with source paths or test evidence. The queen decides; the worker resumes. Do not interrupt the queen for ordinary implementation choices already covered by scope.
 
-## Control loop
+## Route and delegate
 
-1. Read the applicable repository `AGENTS.md` and use its routing table to select only the task-relevant linked rules. Keep responsibility for business decisions and task boundaries.
-2. Call `ds_spawn_agent` with a compact context capsule plus:
-   - `scope_paths`: the bounded workspace-relative files or modules; the controller discovers their root-to-target `AGENTS.md` chain.
-   - `required_reads`: only the additional rules selected in step 1. Use `{path, sections}` for large documents so the worker reads only the relevant sections; a plain path means the whole file. Do not send every repository rule.
-   - `critical_constraints`: a short, loss-resistant summary of the task's non-negotiable constraints. Do not paste complete instruction files or credentials.
-3. Use `workspace_mode="worktree"` when the task can start from `HEAD`. Use `workspace_mode="current"` only when the worker must see current uncommitted files; state that it will edit the shared working tree.
-4. Use `ds_wait_agent` with the returned cursor. If it reports `needs_attention`, inspect the permission or question and respond only within the user's existing authorization.
-5. Compare the worker's acknowledged instruction paths and hashes with the controller-generated `instruction_manifest`, then read the result and diff. The manifest proves which rule versions were selected, not that the model complied; verify claims independently with repository tools and proportionate tests.
-6. If review finds a concrete problem, call `ds_send_message` on the same agent with evidence, the required correction, and focused regression checks. Prefer one correction round before replacing the approach.
-7. Accept or apply only the reviewed patch. Never let the worker commit, push, merge, deploy, alter production data, or disclose secrets unless the user separately authorizes that exact action.
-8. Close the agent when finished. Remove an isolated worktree only after its useful changes are preserved; never remove it merely to tidy up an unresolved task.
+- Handle a tiny, understood edit directly when describing it and reviewing it would take more work than doing it. Hand off a coherent behavior or investigation with acceptance criteria, rather than one function or tool command per turn.
+- Prefer one persistent DeepSeek worker. Avoid additional queen-model workers for ordinary implementation. Reuse the worker for related corrections; use a fresh session for unrelated tasks.
+- Before spawning, read applicable repository instructions and only enough entry-point code to establish scope and acceptance. Let DeepSeek discover the implementation details. Do not solve the task and then ask it to transcribe your solution.
+- Use concrete `scope_paths`, task-relevant `required_reads` (named sections for large files), and a few non-secret `critical_constraints`. Send paths and observable requirements, not full source files or conversation history.
+- Prefer `workspace_mode="worktree"` for work starting from HEAD. Use `current` when the worker needs uncommitted changes, after checking status and protecting unrelated edits. Explain that it edits the shared tree.
 
-## Instruction routing
+## Keep the queen loop small
 
-Use a hybrid protocol: Codex selects and summarizes; DeepSeek reads the selected source files. Repository files remain authoritative, while `critical_constraints` protects the few requirements most likely to be lost in a long document.
+1. Check prerequisites once per environment. Spawn with objective, allowed modules, acceptance criteria and required checks. Ask the worker to finish the assigned investigation or implement, test and fix within those bounds before returning a concise handoff: outcome, changed files, checks actually run, unresolved risks and manifest acknowledgement.
+2. Keep the returned agent ID, worktree, cursor and instruction manifest. Wait using `timeout_ms=55000` and the latest cursor. Compact output is the default; intermediate progress is not an invitation to inspect logs or repeat the worker's exploration. On `needs_attention`, resolve the specific permission/question within existing authorization.
+3. At completion, review the diff and acceptance evidence. Compare instruction acknowledgements to the saved manifest. Read surrounding source only where the diff, missing evidence or risk requires it. Run proportionate independent acceptance checks; do not repeat the worker's entire investigation. A worker's success claim is not proof of correctness.
+4. For a concrete failure, send one focused correction with evidence and the required check to the same worker. Further retries should follow new evidence; if the same failure recurs, reconsider the approach rather than looping unchanged.
+5. Preserve and apply the reviewed patch, then close the agent. Remove its worktree only after useful changes are preserved. Codex owns `/goal` completion after review and validation.
 
-- Always provide concrete `scope_paths` when the task is narrower than the repository. Nested `AGENTS.override.md` takes precedence over `AGENTS.md` in the same directory.
-- Add only rules that change implementation decisions to `required_reads`, normally one or two files for a bounded task. Select named sections when a file is large. Do not include unrelated database, UI, crawler, mobile, or release rules.
-- For tiny edits, implement directly when the instruction and coordination overhead would exceed the code change.
-- `workspace_mode="worktree"` hashes and exposes the committed `HEAD` versions. If an applicable rule or required source exists only as an uncommitted change, use `current` or do not delegate.
-- A missing, escaping, absolute, or out-of-workspace instruction path must fail before model execution.
+Use `ds_inspect_agent` with `detail="full"` only for missing/truncated evidence, errors, instruction acknowledgements or a specific diagnosis; `include_diff=true` explicitly requests the diff. Never echo large logs into queen messages just to summarize them again. Do not infer success from idle, a timeout or unavailable usage.
 
-## `/goal` behavior
+DeepSeek must not commit, push, merge, deploy, modify production data, expose secrets or discard unrelated edits without the user's authorization for that action. If delegation is unavailable, report the limitation and continue locally when authorized.
 
-When a coding goal is active, keep the goal status owned by Codex. The DeepSeek session is subordinate to that goal and does not complete it. Mark the goal complete only after Codex has reviewed the patch, completed required verification, and confirmed no requested work remains.
-
-If delegation is unavailable, continue the goal locally and report the tooling limitation instead of leaving the goal unfinished.
-
-For tool meanings, state mapping, permission handling, and the context-capsule format, read [control contract](references/control-contract.md) when starting or resuming a delegated coding task.
+Read [control contract](references/control-contract.md) when instruction routing, cursor recovery, workspace modes or a lifecycle edge case needs clarification. It is not required reading on every ordinary delegation.

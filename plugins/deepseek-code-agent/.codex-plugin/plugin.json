@@ -1,6 +1,6 @@
 {
   "name": "deepseek-code-agent",
-  "version": "0.1.0",
+  "version": "0.1.0+codex.20260914081904",
   "description": "Delegate coding work to a stateful DeepSeek agent while Codex remains the controller and reviewer.",
   "author": {
     "name": "Fission21",

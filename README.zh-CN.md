@@ -114,13 +114,15 @@ npm --prefix plugins/deepseek-code-agent run test:live
 
 Codex 会选择相关仓库规则，传入明确的 `scope_paths`、任务相关 `required_reads` 和精简的 `critical_constraints`，然后独立审核 diff 与测试。较大的规则文档可以只指定相关章节，不需要整份复制进提示词。
 
-## Token 与耗时预期
+## Queen Token 优化
 
-委派的主要价值是独立实现与质量复核，不是节省 Token。在一轮包含 27 个最终可比较结果的受控合成基准中，优化后的 policy 在小型、中型和大型任务上，Codex + DeepSeek 总路径 Token 都高于 Codex 直接完成。policy 在小型和中型任务上低于强制委派，但大型任务反而更高。
+默认流程让 **queen（Codex）专注于最影响质量的判断**：理解需求、关键设计与取舍、疑难诊断、风险审查和最终验收。工蜂 DeepSeek 承担量大的代码探索、实现、测试、常规修复、文档和证据整理。省 queen Token 应该来自把这些工作交出去，同时保持质量。一次委派一个完整行为，纠错复用同一会话；已知的小改动仍可直接完成。
 
-如果首要目标是降低总 Token 或缩短耗时，应优先直接执行。只有当跨文件探索、独立实现视角或第二轮工程判断的价值足以覆盖控制器与复核开销时，才建议委派。
+`ds_wait_agent` 和 `ds_inspect_agent` 默认只返回精简状态、待处理请求、执行者累计用量和有长度上限的最终交付摘要。普通等待不再带回任务回声、工具过程日志或重复指令清单。需要诊断或补全证据时使用 `detail="full"`，需要 diff 时显式设置 `include_diff=true`。保存首次 spawn 的清单，并持续复用返回的 cursor。
 
-方法、各档中位数、失败尝试和适用限制见[基准报告](./docs/token-routing-benchmark-2026-09-14.md)。
+回传内容缩小可以测量，但**不能直接等同于整项任务节省了多少 Token**。桥接器无法读取 queen 用量；必须对同一任务做直接执行与委派的对照，统计实际 queen 用量，包含失败、审核和纠错，并单列 DS 用量。详见 [queen 验收方法](./docs/queen-token-efficiency.md)。
+
+[原有 27 个最终结果的合成基准](./docs/token-routing-benchmark-2026-09-14.md)统计的是 Codex + DeepSeek 总量，在各档任务上委派都更高。保留这一结论；它不能证明新版 queen 单独节省了多少。总 Token 和耗时仍可能增加。
 
 ## 安全边界
 

@@ -7,7 +7,18 @@ import { DeepSeekController } from "./src/controller.mjs";
 const controller = new DeepSeekController();
 
 const agentID = { type: "string", pattern: "^ses[A-Za-z0-9_-]+$" };
-const cursor = { type: ["string", "null"] };
+const cursor = {
+  type: ["string", "null"],
+  description:
+    "Opaque revision cursor returned by a previous call. Legacy message-ID strings are accepted.",
+};
+const detail = {
+  type: "string",
+  enum: ["compact", "full"],
+  default: "compact",
+  description:
+    "compact (default) returns status, a revision cursor, pending attention, a bounded final assistant report, and cumulative usage on completion/failure. full returns the legacy message-level snapshot including the instruction manifest and complete report.",
+};
 
 export const tools = [
   {
@@ -94,13 +105,14 @@ export const tools = [
   {
     name: "ds_wait_agent",
     description:
-      "Wait up to 55 seconds for new output, completion, retry, or a permission/question that needs controller attention. Reuse the returned cursor on the next wait.",
+      "Wait up to 55 seconds for new output, completion, retry, or a permission/question that needs controller attention. Returns compact status by default; pass detail=full for the complete message snapshot. Reuse the returned cursor on the next wait.",
     inputSchema: {
       type: "object",
       properties: {
         agent_id: agentID,
         cursor,
         timeout_ms: { type: "integer", minimum: 0, maximum: 55000, default: 30000 },
+        detail,
       },
       required: ["agent_id"],
       additionalProperties: false,
@@ -109,7 +121,7 @@ export const tools = [
   {
     name: "ds_inspect_agent",
     description:
-      "Inspect status, recent messages, token/cost data, pending requests, and optionally the current diff for a DeepSeek agent.",
+      "Inspect status, pending requests, cumulative token/cost usage, and the final assistant report for a DeepSeek agent. compact (default) hides intermediate turns, prompts, and the instruction manifest; pass detail=full for the legacy message-level snapshot and complete report.",
     inputSchema: {
       type: "object",
       properties: {
@@ -117,6 +129,7 @@ export const tools = [
         cursor,
         message_limit: { type: "integer", minimum: 1, maximum: 100, default: 20 },
         include_diff: { type: "boolean", default: false },
+        detail,
       },
       required: ["agent_id"],
       additionalProperties: false,

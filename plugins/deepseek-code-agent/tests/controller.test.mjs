@@ -6,11 +6,18 @@ import path from "node:path";
 import { test } from "node:test";
 
 import {
+  DeepSeekController,
+  WORKER_SYSTEM_PROMPT,
+  aggregateUsage,
+  boundReport,
   buildInitialTask,
   commandInvocation,
   compactMessages,
   discoverInstructionManifest,
+  encodeCursor,
   latestMessageID,
+  messageRevision,
+  parseCursor,
   parseServerURL,
 } from "../src/controller.mjs";
 import { tools } from "../server.mjs";
@@ -172,4 +179,577 @@ test("ds_spawn_agent exposes scoped instruction routing", () => {
   assert.ok(spawnTool.inputSchema.properties.scope_paths);
   assert.ok(spawnTool.inputSchema.properties.required_reads);
   assert.ok(spawnTool.inputSchema.properties.critical_constraints);
+});
+
+test("wait and inspect default to compact with a full escape hatch", () => {
+  for (const name of ["ds_wait_agent", "ds_inspect_agent"]) {
+    const tool = tools.find((entry) => entry.name === name);
+    assert.deepEqual(tool.inputSchema.properties.detail.enum, ["compact", "full"]);
+    assert.equal(tool.inputSchema.properties.detail.default, "compact");
+    assert.deepEqual(tool.inputSchema.properties.cursor.type, ["string", "null"]);
+    assert.equal(tool.inputSchema.properties.cursor.oneOf, undefined);
+  }
+});
+
+test("worker handoff prompt is bounded and names the required report fields", () => {
+  assert.match(WORKER_SYSTEM_PROMPT, /1500 characters/);
+  for (const field of ["outcome", "changed files", "checks actually run", "risks", "manifest"]) {
+    assert.match(WORKER_SYSTEM_PROMPT, new RegExp(field, "i"));
+  }
+  assert.match(WORKER_SYSTEM_PROMPT, /do not narrate/i);
+});
+
+test("cursor parsing round-trips revisions and accepts legacy message IDs", () => {
+  const revision = "0123456789abcdef01234567";
+  assert.deepEqual(parseCursor(`${"msg_1"}@${revision}`), {
+    message_id: "msg_1",
+    revision,
+  });
+  assert.deepEqual(parseCursor("msg_legacy"), { message_id: "msg_legacy", revision: null });
+  assert.deepEqual(parseCursor({ message_id: "msg_2", revision }), {
+    message_id: "msg_2",
+    revision,
+  });
+  assert.equal(
+    encodeCursor({ message_id: "msg_2", revision }),
+    `msg_2@${revision}`,
+  );
+  assert.equal(encodeCursor("msg_legacy"), "msg_legacy");
+  assert.equal(encodeCursor(null), null);
+  assert.equal(parseCursor(null), null);
+});
+
+test("messageRevision changes when a streamed message completes with identical text", () => {
+  const partial = {
+    info: { id: "msg_a", role: "assistant", time: { created: 1 } },
+    parts: [{ type: "text", text: "same text" }],
+  };
+  const completed = {
+    info: { id: "msg_a", role: "assistant", time: { created: 1, completed: 2 } },
+    parts: [{ type: "text", text: "same text" }],
+  };
+  assert.notEqual(messageRevision(partial), messageRevision(completed));
+  assert.equal(
+    messageRevision(partial),
+    messageRevision(JSON.parse(JSON.stringify(partial))),
+  );
+});
+
+test("usage aggregates message info and never double counts step-finish parts", () => {
+  const stepFinish = (tokens, cost) => ({ type: "step-finish", reason: "stop", cost, tokens });
+  const firstTokens = {
+    input: 100,
+    output: 50,
+    reasoning: 10,
+    cache: { read: 5, write: 2 },
+    total: 165,
+  };
+  const messages = [
+    userMessage(),
+    assistantMessage({
+      text: "one",
+      cost: 0.25,
+      tokens: firstTokens,
+      parts: [stepFinish(firstTokens, 0.25)],
+    }),
+    assistantMessage({
+      id: "msg_assistant_2",
+      text: "two",
+      parts: [stepFinish({ input: 7, output: 3, cache: { read: 1, write: 1 }, total: 10 }, 0.1)],
+    }),
+    assistantMessage({ id: "msg_assistant_3", text: "three", cost: 0.05, tokens: {} }),
+  ];
+  const usage = aggregateUsage(messages);
+  assert.ok(Math.abs(usage.cost_usd - 0.4) < 1e-9);
+  assert.deepEqual(usage.tokens, {
+    input: 107,
+    output: 53,
+    reasoning: 10,
+    cache_read: 6,
+    cache_write: 3,
+    total: 175,
+  });
+  assert.equal(usage.assistant_messages, 3);
+  assert.equal(usage.messages_with_cost, 3);
+  assert.equal(usage.messages_with_tokens, 2);
+  assert.equal(usage.complete, false);
+  assert.match(usage.note, /token usage unavailable for 1 of 3/);
+  assert.match(usage.source, /step_finish_fallback/);
+
+  const onlyCost = aggregateUsage([
+    assistantMessage({ text: "cost only", cost: 0.2, tokens: {} }),
+  ]);
+  assert.equal(onlyCost.messages_with_tokens, 0);
+  assert.equal(onlyCost.tokens, null);
+  assert.equal(onlyCost.tokens_available, false);
+  assert.equal(onlyCost.cost_available, true);
+  assert.equal(onlyCost.complete, false);
+
+  const missingFields = aggregateUsage([
+    assistantMessage({ text: "total only", cost: 0.1, tokens: { total: 9 } }),
+  ]);
+  assert.deepEqual(missingFields.tokens, {
+    input: null,
+    output: null,
+    reasoning: null,
+    cache_read: null,
+    cache_write: null,
+    total: 9,
+  });
+  assert.equal(missingFields.messages_with_tokens, 1);
+  assert.match(missingFields.note, /token fields unavailable/);
+
+  const empty = aggregateUsage([]);
+  assert.equal(empty.cost_usd, null);
+  assert.equal(empty.tokens, null);
+  assert.equal(empty.complete, false);
+  assert.match(empty.note, /no assistant messages/);
+});
+
+test("boundReport enforces the hard limit and marks truncation", () => {
+  const bounded = boundReport("x".repeat(5000));
+  assert.equal(bounded.truncated, true);
+  assert.ok(bounded.text.length <= 3000);
+  assert.match(bounded.text, /truncated/);
+  const short = boundReport("small report");
+  assert.deepEqual(short, { text: "small report", truncated: false });
+  assert.deepEqual(boundReport(""), { text: null, truncated: false });
+});
+
+const OFFLINE_AGENT_ID = "ses_offline_agent";
+
+function jsonResponse(payload) {
+  return {
+    ok: true,
+    status: 200,
+    async text() {
+      return JSON.stringify(payload);
+    },
+  };
+}
+
+function userMessage(id = "msg_user", text = "Please implement the change.") {
+  return {
+    info: { id, role: "user", time: { created: 1 } },
+    parts: [{ type: "text", text }],
+  };
+}
+
+function assistantMessage({
+  id = "msg_assistant",
+  text = "done",
+  completed,
+  cost,
+  tokens,
+  error,
+  parts = [],
+} = {}) {
+  const info = { id, role: "assistant", time: { created: 1 } };
+  if (completed !== null) info.time.completed = completed ?? 2;
+  if (cost !== undefined) info.cost = cost;
+  if (tokens !== undefined) info.tokens = tokens;
+  if (error !== undefined) info.error = error;
+  return { info, parts: [{ type: "text", text }, ...parts] };
+}
+
+async function offlineController(t, options) {
+  const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "deepseek-controller-"));
+  t.after(async () => {
+    await fs.rm(stateRoot, { recursive: true, force: true });
+  });
+  const controller = new DeepSeekController({
+    stateRoot,
+    spawn: () => {
+      throw new Error("spawn must not be called in offline tests");
+    },
+    fetch: async (url) => {
+      const parsed = new URL(url);
+      if (parsed.pathname === "/session/status") {
+        return jsonResponse({ [OFFLINE_AGENT_ID]: options.status?.() ?? { type: "idle" } });
+      }
+      if (parsed.pathname === `/api/session/${OFFLINE_AGENT_ID}/permission`) {
+        return jsonResponse(options.permissions?.() ?? []);
+      }
+      if (parsed.pathname === `/api/session/${OFFLINE_AGENT_ID}/question`) {
+        return jsonResponse(options.questions?.() ?? []);
+      }
+      if (parsed.pathname === `/session/${OFFLINE_AGENT_ID}/message`) {
+        return jsonResponse(options.messages());
+      }
+      throw new Error(`Unexpected offline request: ${parsed.pathname}`);
+    },
+  });
+  controller.server = { url: "http://127.0.0.1:4096", authorization: "Basic test", child: null };
+  await controller.writeState({
+    agent_id: OFFLINE_AGENT_ID,
+    status: "active",
+    directory: path.join(stateRoot, "workspace"),
+    source_root: path.join(stateRoot, "source"),
+    workspace_mode: "worktree",
+    temp_root: null,
+    owns_worktree: false,
+    created_at: 1,
+    title: "offline",
+    scope_paths: [],
+    instruction_manifest: {
+      files: [{ path: "AGENTS.md", sha256: "abc123", bytes: 10, sources: [], sections: [] }],
+      total_bytes: 10,
+    },
+  });
+  return controller;
+}
+
+test("same-ID streaming completion is captured without replay", async (t) => {
+  let text = "partial answer";
+  let completed = null;
+  const controller = await offlineController(t, {
+    messages: () => [userMessage(), assistantMessage({ text, completed })],
+  });
+
+  const timedOut = await controller.waitAgent({ agent_id: OFFLINE_AGENT_ID, timeout_ms: 0 });
+  assert.equal(timedOut.state, "timed_out");
+  assert.equal(timedOut.final_report, null);
+  assert.equal(timedOut.detail, "compact");
+
+  const unchanged = await controller.inspectAgent({
+    agent_id: OFFLINE_AGENT_ID,
+    cursor: timedOut.cursor,
+  });
+  assert.equal(unchanged.state, "idle");
+  assert.equal(unchanged.final_report, null);
+
+  text = "partial answer plus the final report";
+  completed = 9;
+  const done = await controller.waitAgent({
+    agent_id: OFFLINE_AGENT_ID,
+    cursor: timedOut.cursor,
+    timeout_ms: 0,
+  });
+  assert.equal(done.state, "completed");
+  assert.match(done.final_report, /final report/);
+
+  const repeat = await controller.inspectAgent({
+    agent_id: OFFLINE_AGENT_ID,
+    cursor: done.cursor,
+  });
+  assert.equal(repeat.state, "idle");
+  assert.equal(repeat.final_report, null);
+});
+
+test("repeated timeouts with the same cursor do not replay and legacy strings still work", async (t) => {
+  const controller = await offlineController(t, {
+    messages: () => [userMessage(), assistantMessage({ text: "working", completed: null })],
+  });
+
+  const first = await controller.waitAgent({ agent_id: OFFLINE_AGENT_ID, timeout_ms: 0 });
+  const second = await controller.waitAgent({
+    agent_id: OFFLINE_AGENT_ID,
+    cursor: first.cursor,
+    timeout_ms: 0,
+  });
+  assert.equal(first.state, "timed_out");
+  assert.equal(second.state, "timed_out");
+  assert.equal(second.final_report, null);
+
+  const legacy = await controller.inspectAgent({
+    agent_id: OFFLINE_AGENT_ID,
+    cursor: "msg_assistant",
+  });
+  assert.equal(legacy.state, "idle");
+  assert.equal(legacy.final_report, null);
+
+  const legacyBefore = await controller.inspectAgent({
+    agent_id: OFFLINE_AGENT_ID,
+    cursor: "msg_user",
+  });
+  assert.equal(legacyBefore.state, "idle");
+});
+
+test("idle sessions with only user text are not completed", async (t) => {
+  const controller = await offlineController(t, { messages: () => [userMessage()] });
+
+  const wait = await controller.waitAgent({ agent_id: OFFLINE_AGENT_ID, timeout_ms: 0 });
+  assert.equal(wait.state, "timed_out");
+  assert.equal(wait.final_report, null);
+
+  const inspected = await controller.inspectAgent({ agent_id: OFFLINE_AGENT_ID });
+  assert.equal(inspected.state, "idle");
+  assert.equal(inspected.final_report, null);
+});
+
+test("failed assistant turns are reported as failures, never completed", async (t) => {
+  const controller = await offlineController(t, {
+    messages: () => [
+      userMessage(),
+      assistantMessage({
+        text: "partial work",
+        completed: 5,
+        error: { name: "ProviderAuthError", data: { message: "no credentials" } },
+      }),
+    ],
+  });
+
+  const wait = await controller.waitAgent({ agent_id: OFFLINE_AGENT_ID, timeout_ms: 0 });
+  assert.equal(wait.state, "failed");
+  assert.equal(wait.final_report, null);
+  assert.equal(wait.error.name, "ProviderAuthError");
+  assert.equal(wait.error.message, "no credentials");
+
+  const repeat = await controller.inspectAgent({
+    agent_id: OFFLINE_AGENT_ID,
+    cursor: wait.cursor,
+  });
+  assert.equal(repeat.state, "idle");
+  assert.equal(repeat.final_report, null);
+});
+
+test("pending permissions and questions surface as needs_attention", async (t) => {
+  const controller = await offlineController(t, {
+    messages: () => [userMessage()],
+    permissions: () => [{ id: "per_123", type: "permission" }],
+    questions: () => [{ id: "que_123", type: "question" }],
+  });
+
+  const wait = await controller.waitAgent({ agent_id: OFFLINE_AGENT_ID, timeout_ms: 0 });
+  assert.equal(wait.state, "needs_attention");
+  assert.equal(wait.pending.permissions.length, 1);
+  assert.equal(wait.pending.questions.length, 1);
+  assert.equal(wait.final_report, null);
+});
+
+test("compact hides prompts, intermediates and manifests while full recovers the report", async (t) => {
+  const longReport = `${"R".repeat(6000)}REPORT_TAIL`;
+  const intermediate = "INTERMEDIATE_".repeat(3000);
+  const controller = await offlineController(t, {
+    messages: () => [
+      userMessage("msg_user", "TASK_ECHO_SHOULD_BE_HIDDEN"),
+      assistantMessage({
+        id: "msg_mid",
+        text: intermediate,
+        completed: 3,
+        parts: [{ type: "tool", tool: "bash", state: { status: "completed", title: "ran checks" } }],
+      }),
+      assistantMessage({ id: "msg_final", text: longReport, completed: 4 }),
+    ],
+  });
+
+  const compact = await controller.inspectAgent({ agent_id: OFFLINE_AGENT_ID });
+  assert.equal(compact.state, "completed");
+  assert.equal(compact.report_truncated, true);
+  assert.ok(compact.final_report.length <= 3000);
+  assert.match(compact.final_report, /truncated/);
+  assert.match(compact.report_hint, /detail=full/);
+  assert.doesNotMatch(compact.final_report, /REPORT_TAIL/);
+  assert.ok(!("instruction_manifest" in compact));
+  assert.equal(typeof compact.cursor, "string");
+  const compactText = JSON.stringify(compact);
+  assert.ok(!compactText.includes("TASK_ECHO_SHOULD_BE_HIDDEN"));
+  assert.ok(!compactText.includes("INTERMEDIATE_"));
+  assert.ok(compactText.length < 8000);
+
+  const full = await controller.inspectAgent({
+    agent_id: OFFLINE_AGENT_ID,
+    detail: "full",
+  });
+  assert.equal(full.state, "completed");
+  assert.equal(full.final_report, longReport);
+  assert.equal(full.messages.length, 3);
+  assert.equal(full.instruction_manifest.files.length, 1);
+  assert.equal(typeof full.cursor, "string");
+  assert.ok(!("next_cursor" in full));
+  assert.ok(!("cursor_message_id" in full));
+  const fullText = JSON.stringify(full);
+  assert.ok(fullText.length > compactText.length * 2);
+
+  const fullAfterCursor = await controller.inspectAgent({
+    agent_id: OFFLINE_AGENT_ID,
+    cursor: compact.cursor,
+    detail: "full",
+  });
+  assert.equal(fullAfterCursor.state, "idle");
+  assert.equal(fullAfterCursor.messages.length, 0);
+  assert.equal(fullAfterCursor.final_report, null);
+});
+
+test("timeout observing a completed answer while busy does not skip it on the next idle poll", async (t) => {
+  let status = () => ({ type: "busy" });
+  const messages = () => [
+    userMessage("msg_task", "Do the thing"),
+    assistantMessage({ id: "msg_answer", text: "the final answer", completed: 5 }),
+  ];
+  const controller = await offlineController(t, { messages, status: () => status() });
+
+  const busyWait = await controller.waitAgent({
+    agent_id: OFFLINE_AGENT_ID,
+    cursor: "msg_task",
+    timeout_ms: 0,
+  });
+  assert.equal(busyWait.state, "timed_out");
+  assert.equal(busyWait.final_report, null);
+  assert.equal(parseCursor(busyWait.cursor).message_id, "msg_task");
+
+  status = () => ({ type: "idle" });
+  const done = await controller.waitAgent({
+    agent_id: OFFLINE_AGENT_ID,
+    cursor: busyWait.cursor,
+    timeout_ms: 0,
+  });
+  assert.equal(done.state, "completed");
+  assert.match(done.final_report, /final answer/);
+
+  const replay = await controller.inspectAgent({
+    agent_id: OFFLINE_AGENT_ID,
+    cursor: done.cursor,
+  });
+  assert.equal(replay.state, "idle");
+  assert.equal(replay.final_report, null);
+});
+
+test("fast spawns expose an already-completed answer to the first wait", async (t) => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "deepseek-fast-spawn-"));
+  t.after(async () => {
+    await fs.rm(workspace, { recursive: true, force: true });
+  });
+  const agentID = "ses_fast_spawn";
+  const messages = [
+    userMessage("msg_task", "Do the thing"),
+    assistantMessage({ id: "msg_answer", text: "instant answer", completed: 3 }),
+  ];
+  const submitted = [];
+  const controller = new DeepSeekController({ stateRoot: workspace });
+  controller.server = { url: "http://127.0.0.1:4096", authorization: "Basic test", child: null };
+  controller.request = async (method, endpoint, options = {}) => {
+    if (endpoint === "/session") return { id: agentID, title: "fast spawn" };
+    if (endpoint.endsWith("/prompt_async")) {
+      submitted.push(options.body.parts[0].text);
+      return {};
+    }
+    if (endpoint === "/session/status") return { [agentID]: { type: "idle" } };
+    if (endpoint.endsWith("/permission") || endpoint.endsWith("/question")) return [];
+    if (endpoint.endsWith("/message")) return messages;
+    throw new Error(`Unexpected request: ${endpoint}`);
+  };
+
+  const started = await controller.spawnAgent({
+    task: "Do the thing",
+    workspace,
+    workspace_mode: "current",
+  });
+  assert.equal(submitted.length, 1);
+  assert.equal(parseCursor(started.cursor).message_id, "msg_task");
+
+  const firstWait = await controller.waitAgent({
+    agent_id: agentID,
+    cursor: started.cursor,
+    timeout_ms: 0,
+  });
+  assert.equal(firstWait.state, "completed");
+  assert.match(firstWait.final_report, /instant answer/);
+});
+
+test("wait flushes queued messages only while the raw status is idle, in order", async (t) => {
+  let status = () => ({ type: "busy" });
+  const messages = [userMessage("msg_task", "start")];
+  const submittedTexts = [];
+  const controller = await offlineController(t, {
+    messages: () => messages,
+    status: () => status(),
+  });
+  const passthrough = controller.request.bind(controller);
+  controller.request = async (method, endpoint, options = {}) => {
+    if (endpoint.endsWith("/prompt_async")) {
+      submittedTexts.push(options.body.parts[0].text);
+      messages.push(userMessage(`msg_queued_${submittedTexts.length}`, submittedTexts.at(-1)));
+      return {};
+    }
+    return await passthrough(method, endpoint, options);
+  };
+
+  await controller.enqueue(OFFLINE_AGENT_ID, "first follow-up");
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await controller.enqueue(OFFLINE_AGENT_ID, "second follow-up");
+
+  const busyWait = await controller.waitAgent({ agent_id: OFFLINE_AGENT_ID, timeout_ms: 0 });
+  assert.equal(busyWait.state, "timed_out");
+  assert.deepEqual(submittedTexts, []);
+  assert.equal(await controller.queueCount(OFFLINE_AGENT_ID), 2);
+
+  status = () => ({ type: "idle" });
+  const idleWait = await controller.waitAgent({ agent_id: OFFLINE_AGENT_ID, timeout_ms: 0 });
+  assert.equal(idleWait.state, "timed_out");
+  assert.deepEqual(submittedTexts, ["first follow-up"]);
+  assert.equal(await controller.queueCount(OFFLINE_AGENT_ID), 1);
+});
+
+test("a completed tool-call step is not a final answer", async (t) => {
+  const controller = await offlineController(t, {
+    messages: () => [
+      userMessage(),
+      assistantMessage({
+        text: "",
+        completed: 4,
+        parts: [
+          { type: "step-finish", reason: "tool-calls", cost: 0.01, tokens: { input: 1, output: 1 } },
+        ],
+      }),
+    ],
+  });
+
+  const wait = await controller.waitAgent({ agent_id: OFFLINE_AGENT_ID, timeout_ms: 0 });
+  assert.equal(wait.state, "timed_out");
+  assert.equal(wait.final_report, null);
+
+  const inspected = await controller.inspectAgent({ agent_id: OFFLINE_AGENT_ID });
+  assert.equal(inspected.state, "idle");
+  assert.equal(inspected.final_report, null);
+});
+
+test("partial token fields remain visible even when another message supplies that field", () => {
+  const usage = aggregateUsage([
+    assistantMessage({ text: "one", completed: 1, cost: 0.1, tokens: { input: 10, output: 2, reasoning: 0, cache: { read: 0, write: 0 }, total: 12 } }),
+    assistantMessage({ id: "msg_partial", text: "two", completed: 2, cost: 0.1, tokens: { total: 15 } }),
+  ]);
+  assert.equal(usage.tokens.total, 27);
+  assert.equal(usage.tokens.input, 10);
+  assert.equal(usage.token_field_messages.input, 1);
+  assert.equal(usage.token_field_messages.total, 2);
+  assert.equal(usage.complete, false);
+  assert.match(usage.note, /partial/);
+});
+
+test("full timeout followed by compact wait cannot consume an undelivered final", async (t) => {
+  let busy = true;
+  const controller = await offlineController(t, {
+    status: () => ({ type: busy ? "busy" : "idle" }),
+    messages: () => [userMessage("msg_task", "task"), assistantMessage({ text: "accepted result", completed: 3 })],
+  });
+  const first = await controller.waitAgent({ agent_id: OFFLINE_AGENT_ID, cursor: "msg_task", timeout_ms: 0, detail: "full" });
+  assert.equal(first.state, "timed_out");
+  busy = false;
+  const result = await controller.waitAgent({ agent_id: OFFLINE_AGENT_ID, cursor: first.cursor, timeout_ms: 0 });
+  assert.equal(result.state, "completed");
+  assert.equal(result.final_report, "accepted result");
+});
+
+test("message finish metadata prevents tool steps from becoming final reports", async (t) => {
+  const message = assistantMessage({ text: "about to run checks", completed: 4 });
+  message.info.finish = "tool-calls";
+  const controller = await offlineController(t, { messages: () => [userMessage(), message] });
+  const result = await controller.waitAgent({ agent_id: OFFLINE_AGENT_ID, timeout_ms: 0 });
+  assert.equal(result.state, "timed_out");
+  assert.equal(result.final_report, null);
+});
+
+
+test("unchanged compact waits omit repeated usage and workspace metadata", async (t) => {
+  const controller = await offlineController(t, { messages: () => [userMessage(), assistantMessage({ text: "done", completed: 3 })] });
+  const done = await controller.inspectAgent({ agent_id: OFFLINE_AGENT_ID });
+  assert.ok(done.usage);
+  assert.ok(done.worktree);
+  const waiting = await controller.waitAgent({ agent_id: OFFLINE_AGENT_ID, cursor: done.cursor, timeout_ms: 0 });
+  assert.equal(waiting.state, "timed_out");
+  assert.ok(!("usage" in waiting));
+  assert.ok(!("worktree" in waiting));
+  assert.deepEqual(waiting.pending, { permissions: [], questions: [] });
+  assert.ok(JSON.stringify(waiting).length < 400);
 });
