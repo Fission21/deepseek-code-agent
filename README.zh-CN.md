@@ -114,6 +114,14 @@ npm --prefix plugins/deepseek-code-agent run test:live
 
 Codex 会选择相关仓库规则，传入明确的 `scope_paths`、任务相关 `required_reads` 和精简的 `critical_constraints`，然后独立审核 diff 与测试。较大的规则文档可以只指定相关章节，不需要整份复制进提示词。
 
+## Token 与耗时预期
+
+委派的主要价值是独立实现与质量复核，不是节省 Token。在一轮包含 27 个最终可比较结果的受控合成基准中，优化后的 policy 在小型、中型和大型任务上，Codex + DeepSeek 总路径 Token 都高于 Codex 直接完成。policy 在小型和中型任务上低于强制委派，但大型任务反而更高。
+
+如果首要目标是降低总 Token 或缩短耗时，应优先直接执行。只有当跨文件探索、独立实现视角或第二轮工程判断的价值足以覆盖控制器与复核开销时，才建议委派。
+
+方法、各档中位数、失败尝试和适用限制见[基准报告](./docs/token-routing-benchmark-2026-09-14.md)。
+
 ## 安全边界
 
 - Codex 负责范围、授权、业务决定、审核、验证和目标完成状态。

@@ -1,6 +1,6 @@
 ---
 name: deepseek-coding-delegation
-description: "Delegate implementation work to the stateful DeepSeek coding agent while Codex remains responsible for scope, review, corrections, and verification. Use for coding tasks and active /goal coding objectives that contain a bounded implementation subtask. Do not use for explanation-only requests or when the user explicitly asks Codex to implement without delegation."
+description: "Delegate non-trivial bounded implementation work to the stateful DeepSeek coding agent while Codex remains responsible for scope, review, corrections, and verification. Use when a coding task or active /goal has enough implementation work to outweigh delegation overhead. Route tiny edits directly unless the user explicitly requires a DeepSeek model call."
 ---
 
 # DeepSeek Coding Delegation
@@ -9,9 +9,11 @@ Use the `ds_*` MCP tools to treat DeepSeek V4.1 Flash Max as the implementation 
 
 ## When to delegate
 
-- For an active `/goal` whose objective includes coding, delegate a bounded implementation unit when the DeepSeek tools are available.
+- Treat delegation as a quality and independent-implementation mechanism, not as a token-saving mechanism. Controlled benchmark results show higher combined Codex + DeepSeek token use than direct execution across small, medium, and large tasks.
+- Work directly when minimizing total tokens or latency is the primary goal.
+- Work directly when the expected change is one self-contained function or at most about 30 lines in one file, needs no unfamiliar repository discovery, and has a trivial focused check.
+- Delegate a bounded implementation unit when it spans multiple behaviors or files, needs unfamiliar repository discovery, benefits from an independent implementation pass, or is an active coding `/goal` with enough work to amortize controller and review round trips.
 - Prefer one DeepSeek worker. Do not also create a Codex model subagent unless the user explicitly asks for another model.
-- Handle tiny edits directly when delegation would require more context than the implementation itself.
 - Do not delegate analysis-only, review-only, status, or explanation requests unless implementation is also requested.
 
 ## Control loop
