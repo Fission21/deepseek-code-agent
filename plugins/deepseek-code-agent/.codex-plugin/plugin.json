@@ -1,0 +1,39 @@
+{
+  "name": "deepseek-code-agent",
+  "version": "0.1.0",
+  "description": "Delegate coding work to a stateful DeepSeek agent while Codex remains the controller and reviewer.",
+  "author": {
+    "name": "Fission21",
+    "url": "https://github.com/Fission21"
+  },
+  "homepage": "https://github.com/Fission21/deepseek-code-agent",
+  "repository": "https://github.com/Fission21/deepseek-code-agent",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "deepseek",
+    "opencode",
+    "coding-agent",
+    "multi-agent"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "DeepSeek Code Agent",
+    "shortDescription": "Let DeepSeek implement code while Codex controls and reviews.",
+    "longDescription": "Adds a stateful DeepSeek V4.1 Flash Max coding worker with scoped AGENTS/rule manifests, persistent sessions, queued follow-ups, status waiting, context forks, permission handling, diffs, and Codex review guidance for coding goals.",
+    "developerName": "Fission21",
+    "category": "Developer Tools",
+    "websiteURL": "https://github.com/Fission21/deepseek-code-agent",
+    "capabilities": [
+      "Code",
+      "Write",
+      "Interactive"
+    ],
+    "defaultPrompt": [
+      "Use DeepSeek to implement this coding goal, then review and verify its patch.",
+      "Delegate the implementation to DeepSeek and keep control of corrections.",
+      "Inspect the current DeepSeek coding agent and review its diff."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

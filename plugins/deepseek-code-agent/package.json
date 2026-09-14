@@ -1,0 +1,14 @@
+{
+  "name": "deepseek-code-agent-codex-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node ./scripts/check-prereqs.mjs",
+    "test": "node --test ./tests/*.test.mjs",
+    "test:live": "node ./tests/live-smoke.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

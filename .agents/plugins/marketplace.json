@@ -1,0 +1,20 @@
+{
+  "name": "deepseek-code-agent",
+  "interface": {
+    "displayName": "DeepSeek Code Agent"
+  },
+  "plugins": [
+    {
+      "name": "deepseek-code-agent",
+      "source": {
+        "source": "local",
+        "path": "./plugins/deepseek-code-agent"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

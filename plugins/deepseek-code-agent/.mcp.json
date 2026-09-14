@@ -1,0 +1,26 @@
+{
+  "mcpServers": {
+    "deepseek_code_agent": {
+      "command": "node",
+      "args": ["./server.mjs"],
+      "cwd": ".",
+      "env_vars": [
+        "PATH",
+        "HOME",
+        "USERPROFILE",
+        "LOCALAPPDATA",
+        "TMPDIR",
+        "TEMP",
+        "OPENCODE_BIN",
+        "DEEPSEEK_AGENT_STATE_DIR",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY"
+      ],
+      "startup_timeout_sec": 20,
+      "tool_timeout_sec": 65,
+      "default_tools_approval_mode": "approve"
+    }
+  }
+}
