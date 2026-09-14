@@ -2,9 +2,9 @@
 
 [English](./README.md) | 简体中文
 
-通过 OpenCode Go 把范围明确的编码实现交给 DeepSeek V4.1 Flash，同时由 Codex 保持主控、审核和最终决定权。
+支持通过 OpenCode Go 使用 DeepSeek、GLM，也支持通过 OpenCode 执行器直连 DeepSeek 官方 API。把范围明确的编码实现交给执行者，由 Codex 保持主控、审核和最终决定权。
 
-插件提供持久 DeepSeek 会话、信箱式纠正、状态等待、上下文 fork、权限请求处理、隔离 Git worktree、diff 检查和定向仓库规则清单。它适用于“一个执行者编码、Codex 最终把关”的编码目标。
+插件提供持久执行者会话、信箱式纠正、状态等待、上下文 fork、权限请求处理、隔离 Git worktree、diff 检查和定向仓库规则清单。它适用于“一个执行者编码、Codex 最终把关”的编码目标。
 
 ## 在 Codex 中一句话安装
 
@@ -30,8 +30,8 @@ codex plugin add deepseek-code-agent@deepseek-code-agent
 - 支持插件的本地 Codex 桌面应用或 Codex CLI
 - Git
 - Node.js 18 或更高版本
-- OpenCode，并且账号可以访问 `opencode-go/deepseek-v4.1-flash`
-- OpenCode Go 账号或兼容的模型使用权限
+- 当前版本的 OpenCode（已用 1.18.30 验证）
+- Go 模型需要 OpenCode Go 权限；官方模型需要单独的 DeepSeek API 凭据
 
 插件不保存 API Key。每台电脑都要在本机交互式认证：
 
@@ -47,6 +47,39 @@ opencode-go/deepseek-v4.1-flash
 ```
 
 不要把 Provider Key 粘贴到 Codex 提示词、GitHub Issue、日志或仓库文件中。
+
+## 选择模型
+
+未保存本机偏好时，内置默认是 `opencode-go/deepseek-v4.1-flash`，推理档位 `max`。`ds_check` 和 `ds_spawn_agent` 现在都可以传入：
+
+| 通道 | `provider` | `model` |
+|---|---|---|
+| Go DeepSeek | `opencode-go` | `deepseek-v4.1-flash` |
+| Go GLM | `opencode-go` | `glm-5.3-flash` |
+| 官方 Flash | `deepseek` | `deepseek-flash` |
+| 官方 Pro | `deepseek` | `deepseek-v4-pro` |
+
+日常建议直接口述。单独提出模型和推理档位设置时，默认保存到本机全局；如果是临时使用，加上“这次”或“仅当前任务”：
+
+- “以后都用 OpenCode Go 的 GLM 5.3 Flash，推理开到最大”——保存本机全局默认，之后新建的执行者和未来 Codex 任务都继承。
+- “这次走 DeepSeek 官方 API，用 Flash，推理最高”——只覆盖当前任务的新执行者。
+- “当前默认用什么模型？”——查询实际保存的配置。
+- “恢复插件原来的默认模型”——清除本机偏好，恢复内置默认。
+
+“最大 / 最高 / 拉满”都会映射到 `max`。口述由技能转换成明确的 provider、模型和档位，再通过 `ds_model_defaults` 保存到本机；偏好不写进插件包，重装后仍保留。全局指本插件的新执行者，Codex 主控模型仍由应用设置决定。
+
+选定的模型会随会话保存，追加消息、队列、重启和 fork 都保持该选择。更换模型需要新建执行者；出错时不会自动换通道。
+
+`variant` 可以省略：沿用本机默认模型时继承保存的档位；显式切换到不同模型时，原有 Go DeepSeek 模型默认 `max`，其他模型使用运行时默认档位。显式传 `null` 可让任意模型使用运行时默认值；传字符串时必须是本机模型目录支持的档位。这两个 provider 中已配置到 OpenCode 目录的其他模型 ID 也可使用。
+
+走官方 API 时，在 OpenCode 中使用 `/connect → DeepSeek`，也可以运行 `opencode auth login`。另一种方式是在启动 Codex 前给宿主进程设置 `DEEPSEEK_API_KEY`，插件会传给 OpenCode。官方内置 provider 通常请求 `https://api.deepseek.com`，使用独立的 DeepSeek API 账号；工具执行和多轮上下文仍由 OpenCode 管理。插件不会改写 endpoint 或保存密钥。
+
+```bash
+npm --prefix plugins/deepseek-code-agent run check -- --model glm-5.3-flash --variant max
+npm --prefix plugins/deepseek-code-agent run check -- --provider deepseek
+```
+
+前置检查会区分“目录中有模型”和“本机 provider 已配置”，不会请求推理模型，也不会验证密钥、余额或额度。项目配置、缺失模型和更多命令见 [模型选择与排错](plugins/deepseek-code-agent/skills/deepseek-coding-delegation/references/model-selection.md)。模型 ID 依据 [OpenCode Go 文档](https://opencode.ai/docs/go/) 和 [DeepSeek 当前官方模型说明](https://api-docs.deepseek.com/quick_start/pricing/)。
 
 ## 分系统准备
 
@@ -116,7 +149,7 @@ Codex 会选择相关仓库规则，传入明确的 `scope_paths`、任务相关
 
 ## Queen Token 优化
 
-默认流程让 **queen（Codex）专注于最影响质量的判断**：理解需求、关键设计与取舍、疑难诊断、风险审查和最终验收。工蜂 DeepSeek 承担量大的代码探索、实现、测试、常规修复、文档和证据整理。省 queen Token 应该来自把这些工作交出去，同时保持质量。一次委派一个完整行为，纠错复用同一会话；已知的小改动仍可直接完成。
+默认流程让 **queen（Codex）专注于最影响质量的判断**：理解需求、关键设计与取舍、疑难诊断、风险审查和最终验收。工蜂承担量大的代码探索、实现、测试、常规修复、文档和证据整理。省 queen Token 应该来自把这些工作交出去，同时保持质量。一次委派一个完整行为，纠错复用同一会话；已知的小改动仍可直接完成。
 
 `ds_wait_agent` 和 `ds_inspect_agent` 默认只返回精简状态、待处理请求、执行者累计用量和有长度上限的最终交付摘要。普通等待不再带回任务回声、工具过程日志或重复指令清单。需要诊断或补全证据时使用 `detail="full"`，需要 diff 时显式设置 `include_diff=true`。保存首次 spawn 的清单，并持续复用返回的 cursor。
 
@@ -127,7 +160,7 @@ Codex 会选择相关仓库规则，传入明确的 `scope_paths`、任务相关
 ## 安全边界
 
 - Codex 负责范围、授权、业务决定、审核、验证和目标完成状态。
-- DeepSeek 不得自行提交、推送、合并、部署、修改生产数据、暴露凭据或丢弃无关改动。
+- 执行者不得自行提交、推送、合并、部署、修改生产数据、暴露凭据或丢弃无关改动。
 - 隔离 worktree 从已提交的 `HEAD` 创建，不包含未提交文件。
 - 指令清单记录执行者收到的准确路径、哈希和读取范围，但不能证明语义上完全服从，因此 Codex 仍须审核补丁。
 - 本地 OpenCode 服务只绑定 `127.0.0.1`，每次进程使用随机密码。

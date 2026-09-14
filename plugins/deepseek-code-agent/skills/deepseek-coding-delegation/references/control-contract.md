@@ -46,7 +46,9 @@ The worker must acknowledge each manifest path and hash in its result. Codex com
 
 ## Tool lifecycle
 
-- `ds_check`: verify Node, OpenCode, the OpenCode Go provider, and the requested model before the first delegation on a machine.
+- `ds_model_defaults`: get, set or reset the local machine default for subsequent workers. Change it only for a persistent model-setting request; existing agents keep their selection. See [model selection](model-selection.md) for natural-language scope and precedence.
+
+- `ds_check`: check Node, OpenCode and the selected provider/model configuration; pass the same provider, model, variant and workspace as the planned spawn. This does not verify credentials, balance or inference. See [model selection](model-selection.md).
 - `ds_spawn_agent`: create a persistent OpenCode session and immediately submit the initial task. Save `agent_id`, `cursor`, and `worktree` from the result.
 - `ds_wait_agent`: use `timeout_ms=55000` and the returned cursor. Default `detail="compact"` suppresses intermediate messages, task echoes and repeated manifests. Treat cursors as opaque: revision information preserves same-message streaming updates. Do not reconstruct a cursor from a message ID. On timeout, retain the new cursor and wait again.
 - `ds_send_message`: continue the same context. When the agent is busy, the bridge queues the message and sends it at the next idle boundary.
@@ -61,7 +63,7 @@ The worker must acknowledge each manifest path and hash in its result. Codex com
 
 | Bridge state | Meaning | Controller action |
 |---|---|---|
-| `running` | DeepSeek is working | Wait using the returned cursor |
+| `running` | The worker is working | Wait using the returned cursor |
 | `completed` | Current turn ended with an assistant result | Review handoff and diff; verify acceptance |
 | `failed` | Assistant/provider error | Inspect error and diagnose before retry |
 | `queued` | A follow-up is waiting for the next boundary | Continue waiting |
@@ -74,7 +76,7 @@ The worker must acknowledge each manifest path and hash in its result. Codex com
 
 `worktree` is the safe default and starts from the repository's current `HEAD`. It does not include uncommitted or untracked files. Review the returned worktree and apply the approved patch deliberately.
 
-Instruction discovery and hashing happen after the worktree is created. Consequently, the manifest represents the committed rule versions visible to DeepSeek. If a required rule exists only in the main working tree, spawning fails with a targeted message instead of silently omitting it.
+Instruction discovery and hashing happen after the worktree is created. Consequently, the manifest represents the committed rule versions visible to the worker. If a required rule exists only in the main working tree, spawning fails with a targeted message instead of silently omitting it.
 
 `current` operates directly in the supplied directory. Use it only when the task depends on working-tree changes or isolation is impractical. Check `git status` first and protect unrelated edits.
 

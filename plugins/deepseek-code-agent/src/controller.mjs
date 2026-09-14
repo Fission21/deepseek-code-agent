@@ -8,6 +8,92 @@ export const PROVIDER_ID = "opencode-go";
 export const MODEL_ID = "deepseek-v4.1-flash";
 export const VARIANT = "max";
 
+export function resolveModelSelection({ provider = PROVIDER_ID, model, variant } = {}) {
+  if (![PROVIDER_ID, "deepseek"].includes(provider)) {
+    throw new Error("provider must be opencode-go or deepseek");
+  }
+  if (model === undefined) model = provider === "deepseek" ? "deepseek-flash" : MODEL_ID;
+  if (typeof model !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(model)) {
+    throw new Error("model must be a model ID without a provider prefix or whitespace");
+  }
+  if (variant === undefined) {
+    variant = provider === PROVIDER_ID && model === MODEL_ID ? VARIANT : null;
+  }
+  if (variant !== null && (typeof variant !== "string" || !/^[A-Za-z0-9_-]+$/.test(variant))) {
+    throw new Error("variant must be a non-empty variant name or null for the model default");
+  }
+  return { provider, model, variant };
+}
+
+const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+const VARIANT_PATTERN = /^[A-Za-z0-9_-]+$/;
+const PROVIDER_DEFAULT_MODELS = { [PROVIDER_ID]: MODEL_ID, deepseek: "deepseek-flash" };
+
+function modelDefaultVariant(provider, model) {
+  return provider === PROVIDER_ID && model === MODEL_ID ? VARIANT : null;
+}
+
+export function resolveEffectiveSelection(options = {}, saved = null) {
+  const { provider: explicitProvider, model: explicitModel, variant: explicitVariant } = options;
+  if (explicitProvider !== undefined && ![PROVIDER_ID, "deepseek"].includes(explicitProvider)) {
+    throw new Error("provider must be opencode-go or deepseek");
+  }
+  if (
+    explicitModel !== undefined &&
+    (typeof explicitModel !== "string" || !MODEL_PATTERN.test(explicitModel))
+  ) {
+    throw new Error("model must be a model ID without a provider prefix or whitespace");
+  }
+  if (
+    explicitVariant !== undefined &&
+    explicitVariant !== null &&
+    (typeof explicitVariant !== "string" || !VARIANT_PATTERN.test(explicitVariant))
+  ) {
+    throw new Error("variant must be a non-empty variant name or null for the model default");
+  }
+  const baseProvider = saved?.provider ?? PROVIDER_ID;
+  const baseModel = saved?.model ?? MODEL_ID;
+  let provider;
+  let model;
+  if (explicitProvider !== undefined) {
+    provider = explicitProvider;
+    model = explicitModel ?? PROVIDER_DEFAULT_MODELS[provider];
+  } else if (explicitModel !== undefined) {
+    provider = baseProvider;
+    model = explicitModel;
+  } else {
+    provider = baseProvider;
+    model = baseModel;
+  }
+  let variant;
+  if (explicitVariant !== undefined) {
+    variant = explicitVariant;
+  } else if (saved && provider === baseProvider && model === baseModel) {
+    variant = saved.variant;
+  } else {
+    variant = modelDefaultVariant(provider, model);
+  }
+  return { provider, model, variant };
+}
+
+function selectionForState(state) {
+  // Records written before model selection was introduced always used the original default.
+  return resolveModelSelection(state.model_selection ?? {});
+}
+
+export const BUILTIN_SELECTION = { provider: PROVIDER_ID, model: MODEL_ID, variant: VARIANT };
+const DEFAULTS_FILE = "defaults.json";
+const DEFAULTS_VERSION = 1;
+
+function selectionSummary(state) {
+  const selection = selectionForState(state);
+  return {
+    provider: selection.provider,
+    model: `${selection.provider}/${selection.model}`,
+    variant: selection.variant,
+  };
+}
+
 const SESSION_ID_PATTERN = /^ses[A-Za-z0-9_-]+$/;
 const REQUEST_ID_PATTERN = /^(per|que)[A-Za-z0-9_-]+$/;
 const WORKTREE_PREFIX = "deepseek-code-agent-";
@@ -654,6 +740,7 @@ function compactPayload(data) {
       : { text: null, truncated: false };
   const payload = {
     agent_id: data.agentID,
+    ...selectionSummary(data.state),
     detail: "compact",
     state: data.bridgeState,
     cursor: payloadCursor(data),
@@ -679,6 +766,7 @@ function fullPayload(data, messageLimit = 20) {
   const limit = boundedInteger(messageLimit, 20, 1, 100);
   return {
     agent_id: data.agentID,
+    ...selectionSummary(data.state),
     detail: "full",
     state: data.bridgeState,
     opencode_status: data.rawStatus,
@@ -762,6 +850,7 @@ export class DeepSeekController {
   constructor(options = {}) {
     this.fetch = options.fetch ?? globalThis.fetch;
     this.spawn = options.spawn ?? spawn;
+    this.runCommand = options.runCommand ?? runCommand;
     this.stateRoot = path.resolve(
       options.stateRoot ??
         process.env.DEEPSEEK_AGENT_STATE_DIR ??
@@ -771,10 +860,180 @@ export class DeepSeekController {
     this.serverPromise = null;
   }
 
-  async check() {
+  defaultsPath() {
+    return path.join(this.stateRoot, DEFAULTS_FILE);
+  }
+
+  async readDefaults() {
+    let text;
+    try {
+      text = await fs.readFile(this.defaultsPath(), "utf8");
+    } catch (error) {
+      if (error?.code === "ENOENT") return null;
+      throw new Error(`Unable to read the saved model defaults (${DEFAULTS_FILE}): ${error.message}`);
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (error) {
+      throw new Error(
+        `Saved model defaults (${DEFAULTS_FILE}) are malformed and must be fixed or reset: ${error.message}`,
+      );
+    }
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed) ||
+      parsed.version !== DEFAULTS_VERSION
+    ) {
+      throw new Error(
+        `Saved model defaults (${DEFAULTS_FILE}) have an unsupported format (version ${
+          parsed?.version ?? "missing"
+        }); run ds_model_defaults with action=reset to restore the built-in default.`,
+      );
+    }
+    const missing = ["provider", "model", "variant"].filter((field) => !Object.hasOwn(parsed, field));
+    if (missing.length) {
+      throw new Error(
+        `Saved model defaults (${DEFAULTS_FILE}) are incomplete (missing ${missing.join(", ")}); run ds_model_defaults with action=reset.`,
+      );
+    }
+    const { provider, model, variant } = parsed;
+    try {
+      return resolveModelSelection({ provider, model, variant });
+    } catch (error) {
+      throw new Error(`Saved model defaults (${DEFAULTS_FILE}) are invalid: ${error.message}; run ds_model_defaults with action=reset.`);
+    }
+  }
+
+  async writeDefaults(selection) {
+    const target = this.defaultsPath();
+    await fs.mkdir(this.stateRoot, { recursive: true, mode: 0o700 });
+    const payload = JSON.stringify({ version: DEFAULTS_VERSION, ...selection }, null, 2);
+    const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
+    await fs.writeFile(temporary, `${payload}\n`, { mode: 0o600 });
+    try {
+      await fs.rename(temporary, target);
+    } catch (error) {
+      await fs.rm(temporary, { force: true }).catch(() => {});
+      throw error;
+    }
+    return { ...selection };
+  }
+
+  async clearDefaults() {
+    try {
+      await fs.unlink(this.defaultsPath());
+      return true;
+    } catch (error) {
+      if (error?.code === "ENOENT") return false;
+      throw error;
+    }
+  }
+
+  async modelDefaults({ action = "get", provider, model, variant, workspace } = {}) {
+    if (!new Set(["get", "set", "reset"]).has(action)) {
+      throw new Error("action must be get, set, or reset");
+    }
+    if (action === "reset") {
+      await this.clearDefaults();
+      return {
+        action,
+        ...BUILTIN_SELECTION,
+        configured: "built-in",
+        source: "built_in",
+        settings_path: this.defaultsPath(),
+      };
+    }
+    if (action === "set") {
+      if (provider === undefined && model === undefined && variant === undefined) {
+        throw new Error("set requires at least one of provider, model, or variant");
+      }
+      const current = await this.readDefaults();
+      // Validate against the catalog before anything is saved; a failure leaves
+      // the previous setting untouched.
+      const selection = resolveEffectiveSelection({ provider, model, variant }, current);
+      await this.requireModel(
+        selection,
+        workspace === undefined ? undefined : await fs.realpath(workspace),
+      );
+      await this.writeDefaults(selection);
+      return {
+        action,
+        ...selection,
+        configured: { ...selection },
+        source: "settings_file",
+        credentials_verified: false,
+        inference_verified: false,
+        settings_path: this.defaultsPath(),
+      };
+    }
+    const saved = await this.readDefaults();
+    const selection = resolveEffectiveSelection({}, saved);
+    return {
+      action,
+      ...selection,
+      configured: saved
+        ? { provider: saved.provider, model: saved.model, variant: saved.variant }
+        : "built-in",
+      source: saved ? "settings_file" : "built_in",
+      settings_path: this.defaultsPath(),
+    };
+  }
+
+  async resolveSelection({ provider, model, variant } = {}) {
+    const needsSaved =
+      provider === undefined || model === undefined || variant === undefined;
+    const saved = needsSaved ? await this.readDefaults() : null;
+    return resolveEffectiveSelection({ provider, model, variant }, saved);
+  }
+
+  async modelAvailability(selection, directory) {
+    const catalog = await this.request("GET", "/provider", { directory, timeoutMs: 15000 });
+    if (!Array.isArray(catalog?.all) || !Array.isArray(catalog?.connected)) {
+      throw new Error("OpenCode returned an unsupported provider catalog; update OpenCode and retry");
+    }
+    const provider = catalog.all.find((entry) => entry.id === selection.provider);
+    const model = Object.hasOwn(provider?.models ?? {}, selection.model)
+      ? provider.models[selection.model]
+      : undefined;
+    const variants = Object.entries(model?.variants ?? {})
+      .filter(([, settings]) => !settings?.disabled)
+      .map(([name]) => name);
+    const connected = catalog.connected.includes(selection.provider);
+    const variantAvailable = selection.variant === null || variants.includes(selection.variant);
+    const ok = connected && Boolean(model) && variantAvailable;
+    let hint = "Provider configured and model listed; credentials, balance and inference are not verified.";
+    if (!model) {
+      hint = `Model ${selection.provider}/${selection.model} is not in the OpenCode catalog. Refresh models or configure this model in OpenCode.`;
+    } else if (!connected) {
+      hint = `Connect ${selection.provider} in OpenCode using /connect or opencode auth login${selection.provider === "deepseek" ? ", or pass DEEPSEEK_API_KEY to the host process" : ""}.`;
+    } else if (!variantAvailable) {
+      hint = `Variant ${selection.variant} is unavailable. Available variants: ${variants.join(", ") || "none"}; use variant=null for the model default.`;
+    }
+    return {
+      ok,
+      provider_connected: connected,
+      model_available: Boolean(model),
+      variant_available: variantAvailable,
+      available_variants: variants,
+      credentials_verified: false,
+      inference_verified: false,
+      hint,
+    };
+  }
+
+  async requireModel(selection, directory) {
+    const availability = await this.modelAvailability(selection, directory);
+    if (!availability.ok) throw new Error(availability.hint);
+  }
+
+  async check({ workspace, ...options } = {}) {
+    const selection = await this.resolveSelection(options);
+    const directory = workspace === undefined ? undefined : await fs.realpath(workspace);
     const [version, git] = await Promise.all([
-      runCommand(opencodeBinary(), ["--version"]),
-      runCommand("git", ["--version"]).catch((error) => ({
+      this.runCommand(opencodeBinary(), ["--version"]),
+      this.runCommand("git", ["--version"]).catch((error) => ({
         code: -1,
         stdout: "",
         stderr: error instanceof Error ? error.message : String(error),
@@ -783,25 +1042,17 @@ export class DeepSeekController {
     if (version.code !== 0) {
       throw new Error(`OpenCode is unavailable: ${version.stderr || version.stdout}`);
     }
-    const models = await runCommand(opencodeBinary(), ["models", PROVIDER_ID], {
-      timeoutMs: 30_000,
-    });
-    const modelName = `${PROVIDER_ID}/${MODEL_ID}`;
+    const availability = await this.modelAvailability(selection, directory);
     return {
-      ok: git.code === 0 && models.code === 0 && models.stdout.includes(modelName),
+      ...availability,
+      ok: git.code === 0 && availability.ok,
       platform: process.platform,
       node_version: process.version,
       git_available: git.code === 0,
       git_version: git.stdout.trim(),
       opencode_version: version.stdout.trim(),
-      provider: PROVIDER_ID,
-      model: MODEL_ID,
-      variant: VARIANT,
-      model_available: models.stdout.includes(modelName),
-      hint:
-        git.code === 0 && models.code === 0 && models.stdout.includes(modelName)
-          ? "Ready"
-          : "Install Git and OpenCode, authenticate the opencode-go provider, and confirm the model is enabled.",
+      ...selection,
+      hint: git.code === 0 ? availability.hint : "Install Git before delegating work.",
     };
   }
 
@@ -871,7 +1122,7 @@ export class DeepSeekController {
     return await this.serverPromise;
   }
 
-  async request(method, endpoint, { directory, body } = {}) {
+  async request(method, endpoint, { directory, body, timeoutMs } = {}) {
     const server = await this.ensureServer();
     const url = new URL(endpoint, server.url);
     if (directory) url.searchParams.set("directory", directory);
@@ -882,6 +1133,7 @@ export class DeepSeekController {
         ...(body === undefined ? {} : { "content-type": "application/json" }),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
+      ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
     });
     const text = await response.text();
     if (!response.ok) {
@@ -1024,12 +1276,13 @@ export class DeepSeekController {
   }
 
   async submit(state, text) {
+    const selection = selectionForState(state);
     await this.request("POST", `/session/${state.agent_id}/prompt_async`, {
       directory: state.directory,
       body: {
-        model: { providerID: PROVIDER_ID, modelID: MODEL_ID },
+        model: { providerID: selection.provider, modelID: selection.model },
         agent: "build",
-        variant: VARIANT,
+        ...(selection.variant === null ? {} : { variant: selection.variant }),
         system: WORKER_SYSTEM_PROMPT,
         parts: [{ type: "text", text }],
       },
@@ -1044,6 +1297,9 @@ export class DeepSeekController {
     scope_paths = [],
     required_reads = [],
     critical_constraints = [],
+    provider,
+    model,
+    variant,
   }) {
     if (typeof task !== "string" || !task.trim()) throw new Error("task is required");
     if (typeof workspace !== "string" || !workspace.trim()) {
@@ -1060,12 +1316,17 @@ export class DeepSeekController {
     if (!Array.isArray(required_reads)) {
       throw new Error("required_reads must be an array");
     }
-    const prepared = await this.prepareDirectory(workspace, workspace_mode);
+    const selection = await this.resolveSelection({ provider, model, variant });
+    const sourceDirectory = await fs.realpath(workspace);
+    await this.requireModel(selection, sourceDirectory);
+    const prepared = await this.prepareDirectory(sourceDirectory, workspace_mode);
     let normalizedScopePaths;
     let instructionManifest;
     let normalizedConstraints;
     let initialTask;
     try {
+      // A worktree can have different committed provider settings from the source checkout.
+      if (prepared.directory !== sourceDirectory) await this.requireModel(selection, prepared.directory);
       normalizedScopePaths = scope_paths.map((value) =>
         normalizeRelativePath(value, "scope_paths", { allowDot: true }),
       );
@@ -1092,9 +1353,10 @@ export class DeepSeekController {
     const session = await this.request("POST", "/session", {
       directory: prepared.directory,
       body: {
-        title: title?.trim() || `DeepSeek: ${task.trim().slice(0, 72)}`,
+        title: title?.trim() || `${selection.model}: ${task.trim().slice(0, 72)}`,
         agent: "build",
-        model: { id: MODEL_ID, providerID: PROVIDER_ID, variant: VARIANT },
+        model: { id: selection.model, providerID: selection.provider,
+          ...(selection.variant === null ? {} : { variant: selection.variant }) },
         metadata: {
           controller: "deepseek-code-agent",
           source_root: prepared.sourceRoot,
@@ -1114,6 +1376,7 @@ export class DeepSeekController {
       title: session.title,
       scope_paths: normalizedScopePaths,
       instruction_manifest: instructionManifest,
+      model_selection: selection,
     };
     await this.writeState(state);
     await this.submit(state, initialTask);
@@ -1127,8 +1390,7 @@ export class DeepSeekController {
       source_root: state.source_root,
       scope_paths: state.scope_paths,
       instruction_manifest: state.instruction_manifest,
-      model: `${PROVIDER_ID}/${MODEL_ID}`,
-      variant: VARIANT,
+      ...selectionSummary(state),
     };
   }
 
@@ -1261,6 +1523,7 @@ export class DeepSeekController {
       state: "completed",
       cursor: encodeCursor(selectMessages(await this.messages(child), null).cursor),
       worktree: child.directory,
+      ...selectionSummary(child),
       warning: "The fork shares the parent's filesystem. Run parent and child sequentially.",
     };
   }
@@ -1336,6 +1599,7 @@ export class DeepSeekController {
           parent_agent_id: state.parent_agent_id,
           scope_paths: state.scope_paths ?? [],
           instruction_total_bytes: state.instruction_manifest?.total_bytes ?? 0,
+          ...selectionSummary(state),
         })),
     };
   }

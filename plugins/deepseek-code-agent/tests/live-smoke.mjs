@@ -1,9 +1,20 @@
 import { execFileSync } from "node:child_process";
+import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import { DeepSeekController } from "../src/controller.mjs";
+
+const selection = {};
+const args = process.argv.slice(2);
+for (let index = 0; index < args.length; index += 2) {
+  const key = args[index].replace(/^--/, "");
+  if (!args[index].startsWith("--") || !["provider", "model", "variant"].includes(key) || args[index + 1] === undefined) {
+    throw new Error("Usage: live-smoke.mjs [--provider opencode-go|deepseek] [--model ID] [--variant NAME|null]");
+  }
+  selection[key] = key === "variant" && args[index + 1] === "null" ? null : args[index + 1];
+}
 
 const source = await fs.mkdtemp(path.join(os.tmpdir(), "deepseek-agent-live-source-"));
 const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "deepseek-agent-live-state-"));
@@ -28,6 +39,7 @@ try {
   execFileSync("git", ["-C", source, "commit", "-m", "smoke"], { stdio: "ignore" });
 
   const started = await controller.spawnAgent({
+    ...selection,
     task:
       "Do not modify files and do not run external network commands. Acknowledge the instruction manifest, then end with BRIDGE_READY.",
     workspace: source,
@@ -64,8 +76,14 @@ try {
       throw new Error(`Live response did not acknowledge ${file.path} and its hash: ${text}`);
     }
   }
+  const messages = await controller.messages(await controller.readState(agentID));
+  const assistantMessages = messages.filter((message) => message.info?.role === "assistant");
+  assert.ok(assistantMessages.length > 0);
+  for (const message of assistantMessages) {
+    assert.equal(`${message.info.providerID}/${message.info.modelID}`, started.model);
+  }
   process.stdout.write(
-    `${JSON.stringify({ ok: true, agent_id: agentID, response: "BRIDGE_READY" }, null, 2)}\n`,
+    `${JSON.stringify({ ok: true, agent_id: agentID, model: started.model, variant: started.variant, response: "BRIDGE_READY" }, null, 2)}\n`,
   );
 } finally {
   if (agentID) {

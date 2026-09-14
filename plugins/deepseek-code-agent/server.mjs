@@ -7,6 +7,35 @@ import { DeepSeekController } from "./src/controller.mjs";
 const controller = new DeepSeekController();
 
 const agentID = { type: "string", pattern: "^ses[A-Za-z0-9_-]+$" };
+const modelOptions = {
+  provider: {
+    type: "string", enum: ["opencode-go", "deepseek"],
+    description: "opencode-go uses the Go subscription; deepseek uses separately configured official API credentials. Omitted resolves from the saved machine default, else the built-in Go default.",
+  },
+  model: {
+    type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    description: "Model ID without provider prefix. Omitted resolves from the saved machine default, else the selected provider's Flash model. Must be listed in the local OpenCode catalog.",
+  },
+  variant: {
+    type: ["string", "null"], pattern: "^[A-Za-z0-9_-]+$",
+    description: "Reasoning variant supported by the selected model. Omitted resolves from the saved machine default when the provider/model pair matches it, else the runtime default (max only for Go deepseek-v4.1-flash). Explicit null uses the runtime default for any model.",
+  },
+};
+const modelDefaultsSchema = {
+  type: "object",
+  properties: {
+    action: {
+      type: "string", enum: ["get", "set", "reset"], default: "get",
+      description: "get returns the effective selection and its source. set validates the selection against the local OpenCode catalog, then persists it as the machine-wide default for new workers. reset removes the saved default and restores the built-in Go DeepSeek max selection.",
+    },
+    ...modelOptions,
+    workspace: {
+      type: "string", minLength: 1,
+      description: "Optional workspace path used to validate a set action against project-specific OpenCode provider settings.",
+    },
+  },
+  additionalProperties: false,
+};
 const cursor = {
   type: ["string", "null"],
   description:
@@ -24,16 +53,20 @@ export const tools = [
   {
     name: "ds_check",
     description:
-      "Check whether OpenCode, the OpenCode Go provider, and DeepSeek V4.1 Flash Max are available on this computer. Does not call the model.",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      "Check OpenCode and the selected Go or official DeepSeek model, provider configuration, and variants. Does not call the model or verify credentials, balance, or inference.",
+    inputSchema: { type: "object", properties: {
+      ...modelOptions,
+      workspace: { type: "string", minLength: 1, description: "Optional workspace path for project-specific OpenCode provider settings." },
+    }, additionalProperties: false },
   },
   {
     name: "ds_spawn_agent",
     description:
-      "Create a persistent DeepSeek coding agent and submit its initial task asynchronously. Codex remains responsible for review and verification.",
+      "Create a persistent coding worker using OpenCode Go (DeepSeek or GLM) or the official DeepSeek API. Save the selected model for all follow-ups and forks. Codex owns review and verification.",
     inputSchema: {
       type: "object",
       properties: {
+        ...modelOptions,
         task: { type: "string", minLength: 1 },
         workspace: { type: "string", minLength: 1 },
         workspace_mode: {
@@ -88,9 +121,15 @@ export const tools = [
     },
   },
   {
+    name: "ds_model_defaults",
+    description:
+      "Get, set, or reset the persistent machine-wide model default for newly spawned workers. Existing workers keep their saved selection. set validates against the local OpenCode catalog before saving; get never writes.",
+    inputSchema: modelDefaultsSchema,
+  },
+  {
     name: "ds_send_message",
     description:
-      "Send a correction or follow-up to an existing DeepSeek agent. If it is busy, queue the message for the next idle boundary.",
+      "Send a correction or follow-up to an existing coding worker. If it is busy, queue the message for the next idle boundary.",
     inputSchema: {
       type: "object",
       properties: {
@@ -121,7 +160,7 @@ export const tools = [
   {
     name: "ds_inspect_agent",
     description:
-      "Inspect status, pending requests, cumulative token/cost usage, and the final assistant report for a DeepSeek agent. compact (default) hides intermediate turns, prompts, and the instruction manifest; pass detail=full for the legacy message-level snapshot and complete report.",
+      "Inspect status, pending requests, cumulative token/cost usage, and the final assistant report for a coding worker. compact (default) hides intermediate turns, prompts, and the instruction manifest; pass detail=full for the legacy message-level snapshot and complete report.",
     inputSchema: {
       type: "object",
       properties: {
@@ -138,7 +177,7 @@ export const tools = [
   {
     name: "ds_fork_agent",
     description:
-      "Fork an idle DeepSeek conversation from its current state or a message. The fork shares the same filesystem, so parent and child must run sequentially.",
+      "Fork an idle worker conversation from its current state or a message. The fork shares the same filesystem, so parent and child must run sequentially.",
     inputSchema: {
       type: "object",
       properties: { agent_id: agentID, message_id: { type: ["string", "null"] } },
@@ -148,7 +187,7 @@ export const tools = [
   },
   {
     name: "ds_interrupt_agent",
-    description: "Abort the current DeepSeek turn while preserving its session for a later correction.",
+    description: "Abort the current worker turn while preserving its session for a later correction.",
     inputSchema: {
       type: "object",
       properties: { agent_id: agentID },
@@ -159,7 +198,7 @@ export const tools = [
   {
     name: "ds_reply_agent",
     description:
-      "Reply to a pending DeepSeek permission or question request. Grant permissions only within the user's existing authorization.",
+      "Reply to a pending worker permission or question request. Grant permissions only within the user's existing authorization.",
     inputSchema: {
       type: "object",
       properties: {
@@ -179,13 +218,13 @@ export const tools = [
   },
   {
     name: "ds_list_agents",
-    description: "List locally recorded DeepSeek agents so a Codex session can resume control after restart.",
+    description: "List locally recorded coding workers so a Codex session can resume control after restart.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
     name: "ds_close_agent",
     description:
-      "Close a DeepSeek agent. Isolated worktree removal is optional and must only be requested after useful changes are preserved.",
+      "Close a coding worker. Isolated worktree removal is optional and must only be requested after useful changes are preserved.",
     inputSchema: {
       type: "object",
       properties: {
@@ -201,9 +240,11 @@ export const tools = [
 export async function callTool(name, args = {}) {
   switch (name) {
     case "ds_check":
-      return await controller.check();
+      return await controller.check(args);
     case "ds_spawn_agent":
       return await controller.spawnAgent(args);
+    case "ds_model_defaults":
+      return await controller.modelDefaults(args);
     case "ds_send_message":
       return await controller.sendMessage(args);
     case "ds_wait_agent":

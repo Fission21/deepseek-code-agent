@@ -1,6 +1,6 @@
 interface:
   display_name: "DeepSeek Coding Delegation"
-  short_description: "Delegate implementation to DeepSeek and review it"
+  short_description: "Delegate coding to DeepSeek or GLM and review it"
   default_prompt: "Use $deepseek-coding-delegation to delegate this coding goal and review the result."
 policy:
   allow_implicit_invocation: true

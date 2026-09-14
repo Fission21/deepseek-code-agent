@@ -13,6 +13,7 @@
         "TEMP",
         "OPENCODE_BIN",
         "DEEPSEEK_AGENT_STATE_DIR",
+        "DEEPSEEK_API_KEY",
         "HTTP_PROXY",
         "HTTPS_PROXY",
         "ALL_PROXY",

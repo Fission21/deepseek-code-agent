@@ -2,9 +2,9 @@
 
 English | [简体中文](./README.zh-CN.md)
 
-Delegate bounded implementation work to DeepSeek V4.1 Flash through OpenCode Go while Codex remains the controller, reviewer, and final authority.
+Delegate bounded coding work to DeepSeek or GLM through OpenCode Go, or directly to the official DeepSeek API through the OpenCode runtime. Codex remains the controller, reviewer, and final authority.
 
-The plugin adds persistent DeepSeek sessions, mailbox-style corrections, status waiting, context forks, permission handling, isolated Git worktrees, diff inspection, and scoped repository-instruction manifests. It is designed for coding goals where one worker implements and Codex reviews.
+The plugin adds persistent worker sessions, mailbox-style corrections, status waiting, context forks, permission handling, isolated Git worktrees, diff inspection, and scoped repository-instruction manifests. It is designed for coding goals where one worker implements and Codex reviews.
 
 ## One-sentence installation with Codex
 
@@ -30,8 +30,8 @@ Start a new Codex task after installation so the MCP tools and Skill are loaded.
 - Local Codex desktop app or Codex CLI with plugin support
 - Git
 - Node.js 18 or newer
-- OpenCode with access to the `opencode-go/deepseek-v4.1-flash` model
-- An OpenCode Go account or compatible provider entitlement
+- A current OpenCode version (validated with 1.18.30)
+- OpenCode Go access for Go models, or separate official DeepSeek API credentials
 
 The plugin stores no API keys. Authenticate OpenCode interactively on each computer:
 
@@ -47,6 +47,32 @@ opencode-go/deepseek-v4.1-flash
 ```
 
 Do not paste provider keys into Codex prompts, GitHub issues, logs, or repository files.
+
+## Select the model
+
+Without saved machine preferences, the built-in default remains `opencode-go/deepseek-v4.1-flash` with `max` reasoning. `ds_check` and `ds_spawn_agent` now accept:
+
+| Route | `provider` | `model` |
+|---|---|---|
+| Go DeepSeek | `opencode-go` | `deepseek-v4.1-flash` |
+| Go GLM | `opencode-go` | `glm-5.3-flash` |
+| Official Flash | `deepseek` | `deepseek-flash` |
+| Official Pro | `deepseek` | `deepseek-v4-pro` |
+
+A standalone model/effort-setting request saves the machine default; use “this task only” for a temporary override. Use natural language: “Make OpenCode Go GLM 5.3 Flash with maximum reasoning my machine default,” “Use official DeepSeek Flash just for this task,” “Show my worker defaults,” or “Restore the plugin's original defaults.” Maximum/最高/拉满 map to `max`.
+
+Persistent defaults are saved through `ds_model_defaults`, apply to future workers across Codex tasks on this machine, and survive plugin reinstall. Task-specific choices override them without changing the saved preference. This setting controls plugin workers; the Codex controller model remains an app setting. The selected model persists across follow-ups, queues, restarts and forks. Changing model starts a new worker; errors never silently change providers.
+
+`variant` is optional. The saved model pair inherits its saved variant. When explicitly switching to another pair, only the original Go DeepSeek model defaults to `max`; other models use their runtime default. Explicit `null` uses the runtime default for any model. A string must be supported by that model's local catalog. Other model IDs configured in either provider's OpenCode catalog are also supported.
+
+For official API access, use OpenCode `/connect → DeepSeek` (or `opencode auth login`). Alternatively pass `DEEPSEEK_API_KEY` to the Codex host before launch; the plugin forwards it to OpenCode. The built-in official provider normally requests `https://api.deepseek.com` using your separate DeepSeek account. OpenCode still runs the coding tools and manages conversation history. The plugin does not rewrite provider endpoints or store keys.
+
+```bash
+npm --prefix plugins/deepseek-code-agent run check -- --model glm-5.3-flash --variant max
+npm --prefix plugins/deepseek-code-agent run check -- --provider deepseek
+```
+
+The check reports catalog availability and local provider configuration; it does not call a model or validate the key, balance or quota. See [model selection and troubleshooting](plugins/deepseek-code-agent/skills/deepseek-coding-delegation/references/model-selection.md) for project configuration, missing models and CLI examples. Model IDs are documented in [OpenCode Go](https://opencode.ai/docs/go/) and [DeepSeek's current model page](https://api-docs.deepseek.com/quick_start/pricing/).
 
 ## Platform setup
 
@@ -116,7 +142,7 @@ Codex selects the relevant repository instructions, passes bounded `scope_paths`
 
 ## Queen token efficiency
 
-The default workflow reserves **queen (Codex) judgment** for intent, consequential design choices, uncertain diagnoses, risk-focused review and acceptance. DeepSeek handles high-volume discovery, editing, tests, routine fixes, documentation and evidence preparation within scope. Queen token savings should come from offloading labor while preserving quality. Delegate a coherent unit of work and reuse its session for corrections. Tiny known edits can still cost less to do directly.
+The default workflow reserves **queen (Codex) judgment** for intent, consequential design choices, uncertain diagnoses, risk-focused review and acceptance. The worker handles high-volume discovery, editing, tests, routine fixes, documentation and evidence preparation within scope. Queen token savings should come from offloading labor while preserving quality. Delegate a coherent unit of work and reuse its session for corrections. Tiny known edits can still cost less to do directly.
 
 `ds_wait_agent` and `ds_inspect_agent` default to compact responses: status, attention requests, cumulative worker usage and a bounded final handoff. Task echoes, intermediate tool logs and repeated instruction manifests stay out of the queen's normal context. Use `detail="full"` for diagnosis or omitted evidence and `include_diff=true` when the diff is needed. Save the spawn manifest once and reuse returned cursors.
 
@@ -127,7 +153,7 @@ The [earlier 27-result synthetic benchmark](./docs/token-routing-benchmark-2026-
 ## Safety model
 
 - Codex owns scope, authorization, business decisions, review, verification, and goal completion.
-- DeepSeek must not commit, push, merge, deploy, alter production data, expose credentials, or discard unrelated changes.
+- The worker must not commit, push, merge, deploy, alter production data, expose credentials, or discard unrelated changes.
 - Isolated worktrees start from committed `HEAD`; they do not include uncommitted files.
 - Instruction manifests identify the exact paths, hashes, and read scopes selected for the worker. They do not prove semantic compliance, so Codex must still review the patch.
 - The local OpenCode server binds to `127.0.0.1` and uses a random per-process password.

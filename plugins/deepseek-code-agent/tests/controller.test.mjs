@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 import {
@@ -19,6 +21,8 @@ import {
   messageRevision,
   parseCursor,
   parseServerURL,
+  resolveEffectiveSelection,
+  resolveModelSelection,
 } from "../src/controller.mjs";
 import { tools } from "../server.mjs";
 
@@ -619,6 +623,7 @@ test("fast spawns expose an already-completed answer to the first wait", async (
   const controller = new DeepSeekController({ stateRoot: workspace });
   controller.server = { url: "http://127.0.0.1:4096", authorization: "Basic test", child: null };
   controller.request = async (method, endpoint, options = {}) => {
+    if (endpoint === "/provider") return routingCatalog();
     if (endpoint === "/session") return { id: agentID, title: "fast spawn" };
     if (endpoint.endsWith("/prompt_async")) {
       submitted.push(options.body.parts[0].text);
@@ -646,6 +651,396 @@ test("fast spawns expose an already-completed answer to the first wait", async (
   assert.equal(firstWait.state, "completed");
   assert.match(firstWait.final_report, /instant answer/);
 });
+
+function routingCatalog() {
+  return {
+    connected: ["opencode-go", "deepseek"],
+    all: [
+      { id: "opencode-go", models: {
+        "deepseek-v4.1-flash": { variants: { low: {}, high: {}, max: {} } },
+        "glm-5.3-flash": { variants: { low: {}, high: {}, max: {} } },
+      } },
+      { id: "deepseek", models: {
+        "deepseek-flash": { variants: { low: {}, high: {}, max: {} } },
+        "deepseek-v4-pro": { variants: { high: {}, max: {} } },
+        "future-official-model": {},
+      } },
+    ],
+  };
+}
+
+async function routingController(t, catalog = routingCatalog()) {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "model-routing-"));
+  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
+  const calls = [];
+  const request = async (method, endpoint, options = {}) => {
+    calls.push({ method, endpoint, ...options });
+    if (endpoint === "/provider") return catalog;
+    if (endpoint === "/session") return { id: "ses_route", title: "routing" };
+    if (endpoint.endsWith("/fork")) return { id: "ses_child", title: "fork" };
+    if (endpoint.endsWith("/prompt_async")) return {};
+    if (endpoint === "/session/status") return {};
+    if (endpoint.endsWith("/message")) return [];
+    if (endpoint.endsWith("/permission") || endpoint.endsWith("/question")) return [];
+    throw new Error(`Unexpected routing request: ${endpoint}`);
+  };
+  const options = { stateRoot: path.join(workspace, "state"), runCommand: async () => ({ code: 0, stdout: "test-version", stderr: "" }) };
+  const controller = new DeepSeekController(options);
+  controller.request = request;
+  return { controller, workspace, calls, request, options };
+}
+
+test("model defaults are paired with provider and max is not imposed on other models", () => {
+  assert.deepEqual(resolveModelSelection(), {provider:"opencode-go", model:"deepseek-v4.1-flash", variant:"max"});
+  assert.deepEqual(resolveModelSelection({provider:"deepseek"}), {provider:"deepseek", model:"deepseek-flash", variant:null});
+  assert.equal(resolveModelSelection({model:"glm-5.3-flash"}).variant, null);
+  assert.equal(resolveModelSelection({variant:null}).variant, null);
+  assert.throws(() => resolveModelSelection({provider:"other"}), /provider must/);
+  assert.throws(() => resolveModelSelection({model:"deepseek/deepseek-flash"}), /without a provider prefix/);
+  assert.throws(() => resolveModelSelection({variant:""}), /variant must/);
+});
+
+for (const selection of [
+  {},
+  {model:"glm-5.3-flash"},
+  {model:"glm-5.3-flash",variant:"max"},
+  {provider:"deepseek"},
+  {provider:"deepseek",model:"deepseek-v4-pro",variant:"high"},
+  {provider:"deepseek",model:"future-official-model"},
+  {variant:null},
+]) {
+  test(`spawn uses and persists selected model ${JSON.stringify(selection)}`, async (t) => {
+    const {controller,workspace,calls} = await routingController(t);
+    const expected = resolveModelSelection(selection);
+    const started = await controller.spawnAgent({task:"read code",workspace,workspace_mode:"current",...selection});
+    const creation = calls.find(c=>c.endpoint==="/session");
+    assert.equal(creation.body.model.providerID, expected.provider);
+    assert.equal(creation.body.model.id, expected.model);
+    const prompt = calls.find(c=>c.endpoint.endsWith("/prompt_async")).body;
+    assert.deepEqual(prompt.model, {providerID:expected.provider,modelID:expected.model});
+    assert.equal(prompt.variant, expected.variant ?? undefined);
+    if (expected.variant === null) assert.equal(Object.hasOwn(prompt,"variant"),false);
+    assert.deepEqual((await controller.readState(started.agent_id)).model_selection,expected);
+    assert.equal(started.model,`${expected.provider}/${expected.model}`);
+    assert.equal(started.variant,expected.variant);
+  });
+}
+
+test("preflight separates model catalog, provider configuration and actual authentication", async (t) => {
+  const catalog = routingCatalog();
+  catalog.connected = ["opencode-go"];
+  const {controller,workspace} = await routingController(t,catalog);
+  const check = await controller.check({provider:"deepseek",workspace});
+  assert.equal(check.model,"deepseek-flash");
+  assert.equal(check.model_available,true);
+  assert.equal(check.provider_connected,false);
+  assert.equal(check.ok,false);
+  assert.equal(check.credentials_verified,false);
+  assert.equal(check.inference_verified,false);
+  catalog.connected.push("deepseek");
+  const ready = await controller.check({provider:"deepseek",workspace});
+  assert.equal(ready.ok,true);
+  assert.equal(ready.credentials_verified,false);
+  assert.deepEqual(ready.available_variants,["low","high","max"]);
+});
+
+test("invalid routing is rejected before worktree or session creation", async (t) => {
+  const catalog = routingCatalog();
+  const {controller,workspace,calls} = await routingController(t,catalog);
+  controller.prepareDirectory = () => {throw new Error("must not prepare a worktree");};
+  for (const [selection,pattern] of [
+    [{model:"glm-5.3-flash-other"},/not in the OpenCode catalog/],
+    [{model:"glm-5.3-flash",variant:"medium"},/Variant medium is unavailable/],
+    [{provider:"deepseek",model:"deepseek-v4-pro",variant:"low"},/Variant low is unavailable/],
+    [{model:"toString"},/not in the OpenCode catalog/],
+  ]) await assert.rejects(controller.spawnAgent({workspace,task:"test",...selection}),pattern);
+  catalog.connected=[];
+  await assert.rejects(controller.spawnAgent({workspace,task:"test",provider:"deepseek"}),/Connect deepseek/);
+  assert.equal(calls.some(c=>c.endpoint==="/session"),false);
+});
+
+test("persisted selection survives restart, immediate and queued followups, forks and inspection", async (t) => {
+  const {controller,workspace,calls,request,options} = await routingController(t);
+  const selection={provider:"deepseek",model:"deepseek-flash",variant:null};
+  await controller.spawnAgent({task:"start",workspace,workspace_mode:"current",...selection});
+  const restarted=new DeepSeekController(options);
+  restarted.request=request;
+  await restarted.sendMessage({agent_id:"ses_route",message:"next"});
+  const baseRequest = restarted.request;
+  restarted.request = (method,endpoint,options) => endpoint==="/session/status"
+    ? {ses_route:{type:"busy"}} : baseRequest(method,endpoint,options);
+  const queued=await restarted.sendMessage({agent_id:"ses_route",message:"queued"});
+  assert.equal(queued.state,"queued");
+  restarted.request=baseRequest;
+  await restarted.waitAgent({agent_id:"ses_route",timeout_ms:0});
+  assert.equal(await restarted.queueCount("ses_route"),0);
+  const fork=await restarted.forkAgent({agent_id:"ses_route"});
+  await restarted.sendMessage({agent_id:fork.agent_id,message:"child"});
+  const prompts=calls.filter(c=>c.endpoint.endsWith("/prompt_async"));
+  assert.equal(prompts.length,4);
+  for (const call of prompts) {
+    assert.deepEqual(call.body.model,{providerID:"deepseek",modelID:"deepseek-flash"});
+    assert.equal(Object.hasOwn(call.body,"variant"),false);
+  }
+  assert.equal(fork.model,"deepseek/deepseek-flash");
+  assert.deepEqual((await restarted.readState(fork.agent_id)).model_selection,selection);
+  for (const detail of ["compact","full"]) {
+    const status=await restarted.inspectAgent({agent_id:fork.agent_id,detail});
+    assert.equal(status.model,"deepseek/deepseek-flash");
+    assert.equal(status.variant,null);
+  }
+  assert.ok((await restarted.listAgents()).agents.every(a=>a.model==="deepseek/deepseek-flash"));
+});
+
+test("legacy state uses the original model on followup", async (t) => {
+  const {controller,workspace,calls} = await routingController(t);
+  await controller.writeState({agent_id:"ses_route",directory:workspace,status:"active"});
+  await controller.sendMessage({agent_id:"ses_route",message:"resume"});
+  const prompt=calls.find(c=>c.endpoint.endsWith("/prompt_async")).body;
+  assert.deepEqual(prompt.model,{providerID:"opencode-go",modelID:"deepseek-v4.1-flash"});
+  assert.equal(prompt.variant,"max");
+});
+
+const DEFAULTS_SELECTION = {provider:"opencode-go",model:"glm-5.3-flash",variant:"high"};
+
+async function withSavedDefaults(t, selection = DEFAULTS_SELECTION) {
+  const routed = await routingController(t);
+  await fs.mkdir(routed.controller.stateRoot, { recursive: true, mode: 0o700 });
+  if (selection) await routed.controller.writeDefaults(selection);
+  return routed;
+}
+
+test("model defaults get reports effective selection, source and settings path", async (t) => {
+  const {controller} = await routingController(t);
+  const builtin = await controller.modelDefaults({action:"get"});
+  assert.deepEqual(
+    {provider:builtin.provider,model:builtin.model,variant:builtin.variant},
+    {provider:"opencode-go",model:"deepseek-v4.1-flash",variant:"max"},
+  );
+  assert.equal(builtin.configured,"built-in");
+  assert.equal(builtin.source,"built_in");
+  assert.equal(builtin.settings_path,path.join(controller.stateRoot,"defaults.json"));
+  await controller.writeDefaults(DEFAULTS_SELECTION);
+  const saved = await controller.modelDefaults({action:"get"});
+  assert.deepEqual(
+    {provider:saved.provider,model:saved.model,variant:saved.variant},
+    DEFAULTS_SELECTION,
+  );
+  assert.deepEqual(saved.configured,DEFAULTS_SELECTION);
+  assert.equal(saved.source,"settings_file");
+});
+
+test("model defaults set validates against the catalog and persists atomically with mode 0600", async (t) => {
+  const {controller} = await routingController(t);
+  const result = await controller.modelDefaults({action:"set",provider:"deepseek",model:"deepseek-flash",variant:"high"});
+  assert.deepEqual(
+    {provider:result.provider,model:result.model,variant:result.variant},
+    {provider:"deepseek",model:"deepseek-flash",variant:"high"},
+  );
+  assert.deepEqual(result.configured,{provider:"deepseek",model:"deepseek-flash",variant:"high"});
+  assert.equal(result.source,"settings_file");
+  const stat = await fs.stat(controller.defaultsPath());
+  assert.equal((stat.mode & 0o777),0o600);
+  const onDisk = JSON.parse(await fs.readFile(controller.defaultsPath(),"utf8"));
+  assert.deepEqual(onDisk,{version:1,provider:"deepseek",model:"deepseek-flash",variant:"high"});
+});
+
+test("model defaults set rejects invalid selections and leaves the prior setting unchanged", async (t) => {
+  const {controller} = await withSavedDefaults(t);
+  const before = await fs.readFile(controller.defaultsPath(),"utf8");
+  await assert.rejects(
+    controller.modelDefaults({action:"set",model:"missing-model"}),
+    /not in the OpenCode catalog/,
+  );
+  await assert.rejects(
+    controller.modelDefaults({action:"set",model:"glm-5.3-flash",variant:"medium"}),
+    /Variant medium is unavailable/,
+  );
+  await assert.rejects(
+    controller.modelDefaults({action:"set",provider:"other"}),
+    /provider must be/,
+  );
+  await assert.rejects(controller.modelDefaults({action:"set"}),/set requires at least one/);
+  assert.equal(await fs.readFile(controller.defaultsPath(),"utf8"),before);
+  assert.deepEqual((await controller.modelDefaults({action:"get"})).variant,"high");
+});
+
+test("model defaults reset clears only the settings file even when it is corrupt", async (t) => {
+  const {controller} = await withSavedDefaults(t);
+  await fs.writeFile(controller.defaultsPath(),"{not json",{mode:0o600});
+  await assert.rejects(controller.modelDefaults({action:"get"}),/malformed/);
+  const result = await controller.modelDefaults({action:"reset"});
+  assert.deepEqual(
+    {provider:result.provider,model:result.model,variant:result.variant},
+    {provider:"opencode-go",model:"deepseek-v4.1-flash",variant:"max"},
+  );
+  assert.equal(result.configured,"built-in");
+  assert.equal(result.source,"built_in");
+  await assert.rejects(fs.access(controller.defaultsPath()),{code:"ENOENT"});
+  const after = await controller.modelDefaults({action:"get"});
+  assert.equal(after.configured,"built-in");
+  assert.equal(after.source,"built_in");
+});
+
+test("structurally invalid defaults also error clearly instead of silently falling back", async (t) => {
+  const {controller} = await withSavedDefaults(t,null);
+  await fs.writeFile(
+    controller.defaultsPath(),
+    JSON.stringify({version:2,provider:"opencode-go"}),
+    {mode:0o600},
+  );
+  await assert.rejects(controller.modelDefaults({action:"get"}),/unsupported format/);
+  await controller.modelDefaults({action:"reset"});
+  assert.equal((await controller.modelDefaults({action:"get"})).configured,"built-in");
+});
+
+test("a selection object with an invalid model id in the file is also rejected", async (t) => {
+  const {controller} = await withSavedDefaults(t,null);
+  await fs.writeFile(
+    controller.defaultsPath(),
+    JSON.stringify({version:1,provider:"opencode-go",model:"a b",variant:null}),
+    {mode:0o600},
+  );
+  await assert.rejects(controller.modelDefaults({action:"get"}),/model must be a model ID/);
+});
+
+test("incomplete saved defaults are rejected while explicit null variant remains valid", async (t) => {
+  const {controller} = await withSavedDefaults(t,null);
+  const valid = {version:1,provider:"opencode-go",model:"glm-5.3-flash",variant:null};
+  for (const field of ["provider","model","variant"]) {
+    const incomplete = {...valid};
+    delete incomplete[field];
+    await fs.writeFile(controller.defaultsPath(),JSON.stringify(incomplete));
+    await assert.rejects(controller.modelDefaults({action:"get"}), /incomplete.*action=reset/);
+    await assert.rejects(controller.check(), /incomplete.*action=reset/);
+    await controller.modelDefaults({action:"reset"});
+    await assert.rejects(fs.access(controller.defaultsPath()),{code:"ENOENT"});
+  }
+  await fs.writeFile(controller.defaultsPath(),JSON.stringify(valid));
+  const read = await controller.modelDefaults({action:"get"});
+  assert.equal(read.variant,null);
+  assert.equal(read.model,"glm-5.3-flash");
+});
+
+test("explicit options win over saved machine defaults, which win over built-in", async (t) => {
+  const {controller} = await routingController(t);
+  await controller.writeDefaults({provider:"deepseek",model:"deepseek-v4-pro",variant:"high"});
+  assert.deepEqual(
+    await controller.modelDefaults({action:"get"}),
+    {action:"get",provider:"deepseek",model:"deepseek-v4-pro",variant:"high",configured:{provider:"deepseek",model:"deepseek-v4-pro",variant:"high"},source:"settings_file",settings_path:controller.defaultsPath()},
+  );
+});
+
+test("partial overrides follow route inheritance rules against saved defaults", () => {
+  const saved = {provider:"opencode-go",model:"glm-5.3-flash",variant:"high"};
+  assert.deepEqual(resolveEffectiveSelection({},saved),saved);
+  assert.deepEqual(resolveEffectiveSelection({variant:"max"},saved),
+    {provider:"opencode-go",model:"glm-5.3-flash",variant:"max"});
+  assert.deepEqual(resolveEffectiveSelection({variant:null},saved),
+    {provider:"opencode-go",model:"glm-5.3-flash",variant:null});
+  assert.deepEqual(resolveEffectiveSelection({model:"glm-5.3-flash"},saved),saved);
+  assert.deepEqual(resolveEffectiveSelection({model:"deepseek-v4.1-flash"},saved),
+    {provider:"opencode-go",model:"deepseek-v4.1-flash",variant:"max"});
+  assert.deepEqual(resolveEffectiveSelection({provider:"deepseek"},saved),
+    {provider:"deepseek",model:"deepseek-flash",variant:null});
+  assert.deepEqual(resolveEffectiveSelection({provider:"deepseek",model:"deepseek-flash"},saved),
+    {provider:"deepseek",model:"deepseek-flash",variant:null});
+  assert.deepEqual(resolveEffectiveSelection({provider:"opencode-go",model:"glm-5.3-flash"},saved),
+    {provider:"opencode-go",model:"glm-5.3-flash",variant:"high"});
+  const noSaved = resolveEffectiveSelection({},null);
+  assert.deepEqual(noSaved,{provider:"opencode-go",model:"deepseek-v4.1-flash",variant:"max"});
+  assert.deepEqual(resolveEffectiveSelection({variant:"low"},null),
+    {provider:"opencode-go",model:"deepseek-v4.1-flash",variant:"low"});
+  assert.deepEqual(resolveEffectiveSelection({variant:null},null),
+    {provider:"opencode-go",model:"deepseek-v4.1-flash",variant:null});
+  assert.deepEqual(resolveEffectiveSelection({model:"deepseek-flash"},null),
+    {provider:"opencode-go",model:"deepseek-flash",variant:null});
+  assert.deepEqual(resolveEffectiveSelection({provider:"deepseek",variant:"high"},null),
+    {provider:"deepseek",model:"deepseek-flash",variant:"high"});
+  assert.throws(() => resolveEffectiveSelection({provider:"x"},null),/provider must/);
+  assert.throws(() => resolveEffectiveSelection({model:"a b"},null),/model must/);
+  assert.throws(() => resolveEffectiveSelection({variant:"a b"},null),/variant must/);
+});
+
+test("check is read-only: no defaults file is created and an existing one stays byte-identical", async (t) => {
+  const {controller,workspace} = await withSavedDefaults(t);
+  const before = await fs.readFile(controller.defaultsPath(),"utf8");
+  await controller.check({workspace});
+  assert.equal(await fs.readFile(controller.defaultsPath(),"utf8"),before);
+  const {controller: bare,workspace: bareWorkspace} = await routingController(t);
+  await bare.check({workspace: bareWorkspace});
+  await assert.rejects(fs.access(bare.defaultsPath()),{code:"ENOENT"});
+});
+
+test("new spawns inherit the saved machine default; explicit spawn options still win", async (t) => {
+  const {controller,workspace,calls} = await withSavedDefaults(t);
+  let sessionCounter = 0;
+  const baseRequest = controller.request;
+  controller.request = (method, endpoint, options = {}) => {
+    if (method === "POST" && endpoint === "/session") {
+      calls.push({method, endpoint, ...options});
+      return { id: `ses_spawn_${String(++sessionCounter).padStart(2,"0")}`, title: options.body?.title };
+    }
+    return baseRequest(method, endpoint, options);
+  };
+  const started = await controller.spawnAgent({task:"inherit",workspace,workspace_mode:"current"});
+  const prompt = calls.find(c=>c.endpoint.endsWith("/prompt_async")).body;
+  assert.deepEqual(prompt.model,{providerID:"opencode-go",modelID:"glm-5.3-flash"});
+  assert.equal(prompt.variant,"high");
+  assert.equal(started.model,"opencode-go/glm-5.3-flash");
+  const explicit = await controller.spawnAgent({
+    task:"explicit",workspace,workspace_mode:"current",provider:"deepseek",model:"deepseek-v4-pro",variant:"high",
+  });
+  const prompts = calls.filter(c=>c.endpoint.endsWith("/prompt_async"));
+  assert.deepEqual(prompts[1].body.model,{providerID:"deepseek",modelID:"deepseek-v4-pro"});
+  assert.equal(prompts[1].body.variant,"high");
+  assert.deepEqual((await controller.readState(started.agent_id)).model_selection,DEFAULTS_SELECTION);
+  assert.deepEqual(
+    (await controller.readState(explicit.agent_id)).model_selection,
+    {provider:"deepseek",model:"deepseek-v4-pro",variant:"high"},
+  );
+});
+
+test("existing agents, queued followups, forks and legacy state ignore machine defaults", async (t) => {
+  const {controller,workspace,calls,request,options} = await withSavedDefaults(t);
+  const saved = {provider:"deepseek",model:"deepseek-flash",variant:null};
+  await controller.spawnAgent({task:"start",workspace,workspace_mode:"current",...saved});
+  const restarted = new DeepSeekController(options);
+  restarted.request = request;
+  await restarted.sendMessage({agent_id:"ses_route",message:"next"});
+  const baseRequest = restarted.request;
+  restarted.request = (method,endpoint,o) => endpoint==="/session/status"
+    ? {ses_route:{type:"busy"}} : baseRequest(method,endpoint,o);
+  await restarted.sendMessage({agent_id:"ses_route",message:"queued"});
+  restarted.request = baseRequest;
+  await restarted.waitAgent({agent_id:"ses_route",timeout_ms:0});
+  const fork = await restarted.forkAgent({agent_id:"ses_route"});
+  await restarted.sendMessage({agent_id:fork.agent_id,message:"child"});
+  const prompts = calls.filter(c=>c.endpoint.endsWith("/prompt_async"));
+  for (const call of prompts.slice(1)) {
+    assert.deepEqual(call.body.model,{providerID:"deepseek",modelID:"deepseek-flash"});
+    assert.equal(Object.hasOwn(call.body,"variant"),false);
+  }
+  assert.equal(prompts.length,4);
+  assert.deepEqual((await restarted.readState(fork.agent_id)).model_selection,saved);
+  await controller.writeState({agent_id:"ses_legacy",directory:workspace,status:"active"});
+  await controller.sendMessage({agent_id:"ses_legacy",message:"legacy"});
+  const legacy = calls.filter(c=>c.endpoint.endsWith("/prompt_async")).at(-1).body;
+  assert.deepEqual(legacy.model,{providerID:"opencode-go",modelID:"deepseek-v4.1-flash"});
+  assert.equal(legacy.variant,"max");
+});
+
+test("ds_model_defaults schema exposes actions and omits injected provider default", () => {
+  const listed = tools.find(t=>t.name==="ds_model_defaults");
+  assert.ok(listed);
+  assert.deepEqual(listed.inputSchema.properties.action.enum,["get","set","reset"]);
+  assert.ok(listed.inputSchema.properties.provider);
+  assert.ok(listed.inputSchema.properties.workspace);
+  for (const name of ["ds_check","ds_spawn_agent","ds_model_defaults"]) {
+    assert.equal(tools.find(t=>t.name===name).inputSchema.properties.provider.default,undefined);
+  }
+});
+
 
 test("wait flushes queued messages only while the raw status is idle, in order", async (t) => {
   let status = () => ({ type: "busy" });
@@ -752,4 +1147,78 @@ test("unchanged compact waits omit repeated usage and workspace metadata", async
   assert.ok(!("worktree" in waiting));
   assert.deepEqual(waiting.pending, { permissions: [], questions: [] });
   assert.ok(JSON.stringify(waiting).length < 400);
+});
+
+const pluginRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+
+test("model-defaults CLI parses actions and flags using only a temporary state root", async (t) => {
+  const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "model-defaults-cli-"));
+  t.after(() => fs.rm(stateRoot, { recursive: true, force: true }));
+  const run = (args) =>
+    new Promise((resolve) => {
+      const child = spawn(
+        process.execPath,
+        [path.join(pluginRoot, "scripts", "model-defaults.mjs"), ...args],
+        {
+          env: { ...process.env, DEEPSEEK_AGENT_STATE_DIR: stateRoot },
+          stdio: ["ignore", "pipe", "pipe"],
+          windowsHide: true,
+        },
+      );
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (chunk) => { stdout += chunk; });
+      child.stderr.on("data", (chunk) => { stderr += chunk; });
+      child.on("close", (code) => resolve({ code, stdout, stderr }));
+    });
+
+  const missing = await run(["bogus"]);
+  assert.equal(missing.code, 1);
+  assert.match(missing.stderr, /Usage: model-defaults\.mjs get\|set\|reset/);
+
+  const noSet = await run(["set"]);
+  assert.equal(noSet.code, 1);
+  assert.match(noSet.stderr, /set requires at least one/);
+
+  const badFlag = await run(["set", "--unknown", "x"]);
+  assert.equal(badFlag.code, 1);
+  assert.match(badFlag.stderr, /Usage: model-defaults\.mjs/);
+
+  const danglingFlag = await run(["set", "--variant"]);
+  assert.equal(danglingFlag.code, 1);
+  assert.match(danglingFlag.stderr, /Usage: model-defaults\.mjs/);
+
+  const getWithOptions = await run(["get", "--provider", "deepseek"]);
+  assert.equal(getWithOptions.code, 1);
+  assert.match(getWithOptions.stderr, /get takes no options/);
+
+  const initial = await run(["get"]);
+  assert.equal(initial.code, 0);
+  const initialPayload = JSON.parse(initial.stdout);
+  assert.equal(initialPayload.action, "get");
+  assert.equal(initialPayload.model, "deepseek-v4.1-flash");
+  assert.equal(initialPayload.variant, "max");
+  assert.equal(initialPayload.source, "built_in");
+  assert.ok(initialPayload.settings_path.startsWith(stateRoot));
+  await assert.rejects(fs.access(path.join(stateRoot, "defaults.json")), { code: "ENOENT" });
+
+  await fs.writeFile(
+    path.join(stateRoot, "defaults.json"),
+    "{corrupt",
+    { mode: 0o600 },
+  );
+  const corrupt = await run(["get"]);
+  assert.equal(corrupt.code, 1);
+  assert.match(corrupt.stderr, /malformed/);
+
+  const reset = await run(["reset"]);
+  assert.equal(reset.code, 0);
+  const resetPayload = JSON.parse(reset.stdout);
+  assert.equal(resetPayload.action, "reset");
+  assert.equal(resetPayload.configured, "built-in");
+  assert.equal(resetPayload.source, "built_in");
+  await assert.rejects(fs.access(path.join(stateRoot, "defaults.json")), { code: "ENOENT" });
+  const restored = await run(["get"]);
+  assert.equal(restored.code, 0);
+  assert.equal(JSON.parse(restored.stdout).source, "built_in");
 });

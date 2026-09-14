@@ -1,7 +1,7 @@
 {
   "name": "deepseek-code-agent",
-  "version": "0.1.0+codex.20260914081904",
-  "description": "Delegate coding work to a stateful DeepSeek agent while Codex remains the controller and reviewer.",
+  "version": "0.1.0+codex.20260914100017",
+  "description": "Delegate coding to persistent DeepSeek or GLM workers through OpenCode Go or the official DeepSeek API, with Codex review.",
   "author": {
     "name": "Fission21",
     "url": "https://github.com/Fission21"
@@ -14,13 +14,14 @@
     "deepseek",
     "opencode",
     "coding-agent",
-    "multi-agent"
+    "multi-agent",
+    "glm"
   ],
   "skills": "./skills/",
   "interface": {
     "displayName": "DeepSeek Code Agent",
-    "shortDescription": "Let DeepSeek implement code while Codex controls and reviews.",
-    "longDescription": "Adds a stateful DeepSeek V4.1 Flash Max coding worker with scoped AGENTS/rule manifests, persistent sessions, queued follow-ups, status waiting, context forks, permission handling, diffs, and Codex review guidance for coding goals.",
+    "shortDescription": "Delegate coding to DeepSeek or GLM with Codex review.",
+    "longDescription": "Adds configurable DeepSeek and GLM coding workers through OpenCode Go or the official DeepSeek API, with natural-language model selection, persistent machine defaults, scoped instruction manifests, queued follow-ups, forks, permissions, diffs and Codex review guidance.",
     "developerName": "Fission21",
     "category": "Developer Tools",
     "websiteURL": "https://github.com/Fission21/deepseek-code-agent",
@@ -30,9 +31,9 @@
       "Interactive"
     ],
     "defaultPrompt": [
-      "Use DeepSeek to implement this coding goal, then review and verify its patch.",
-      "Delegate the implementation to DeepSeek and keep control of corrections.",
-      "Inspect the current DeepSeek coding agent and review its diff."
+      "Use DeepSeek or GLM to implement this coding goal, then review and verify its patch.",
+      "Set OpenCode Go GLM 5.3 Flash with maximum reasoning as my machine default for new coding workers.",
+      "Show the current default worker model and inspect the active coding agent."
     ]
   },
   "mcpServers": "./.mcp.json"
