@@ -839,8 +839,11 @@ test("model defaults set validates against the catalog and persists atomically w
   );
   assert.deepEqual(result.configured,{provider:"deepseek",model:"deepseek-flash",variant:"high"});
   assert.equal(result.source,"settings_file");
-  const stat = await fs.stat(controller.defaultsPath());
-  assert.equal((stat.mode & 0o777),0o600);
+  // Windows uses ACLs; stat.mode does not represent POSIX permission bits.
+  if (process.platform !== "win32") {
+    const stat = await fs.stat(controller.defaultsPath());
+    assert.equal((stat.mode & 0o777),0o600);
+  }
   const onDisk = JSON.parse(await fs.readFile(controller.defaultsPath(),"utf8"));
   assert.deepEqual(onDisk,{version:1,provider:"deepseek",model:"deepseek-flash",variant:"high"});
 });
