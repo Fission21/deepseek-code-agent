@@ -142,6 +142,12 @@ Codex selects the relevant repository instructions, passes bounded `scope_paths`
 
 ## Queen token efficiency
 
+### Route by task complexity
+
+Choose the route from reasoning, risk, and exploration/verification burden, not line or file counts. **Small** known edits that take a few minutes stay with Codex. **Medium** mechanical work with clear acceptance criteria prefers one persistent worker. **Large or high-risk** work — state machines, concurrency, permissions, transactions, migrations — may still delegate the labor, but Codex must first fix the design, interfaces, invariants, failure semantics and acceptance cases, then review the actual diff and run independent verification; a worker's self-report or passing self-tests are never acceptance. An explicit user request to delegate or to stay direct overrides these defaults.
+
+A 2026-09-15 pilot paired one direct and one delegated execution per size from the same commit: [task routing pilot](./docs/task-routing-pilot-2026-09-15.md). It ran one execution per cell in parallel without alternating order, so it is not the repeated benchmark the queen protocol asks for, and its numbers neither generalize nor promise a fixed saving. In that pilot, delegated worker non-cached input plus output was 13.78% below the three direct runs, while the controller's own interval was 55.41% below the direct proxy total; the controller interval also covers managing the native control arm and reviewing both runs, so it is not a pure delegation bill. Worker totals including cached reads were higher than direct totals, so combined tokens and latency can still increase; medium and large worker usage is marked incomplete.
+
 ### Design, implement, verify, review
 
 Codex reads the critical call chain and decides interfaces, invariants and acceptance cases before delegation. An optional `task_spec` gives the worker those decisions and the exact check commands. The worker completes implementation, self-tests and routine repairs in one session. Codex reviews the patch and batches feedback; after two unsuccessful correction rounds it can take over after confirming the worker and verification have stopped.

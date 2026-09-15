@@ -1,0 +1,202 @@
+{
+  "schema_version": 1,
+  "pilot_id": "task-routing-pilot-2026-09-15",
+  "kind": "transparent_single_pair_pilot",
+  "date": "2026-09-15",
+  "baseline_commit": "90d84be225fe2751ed0583917e7391ff29245559",
+  "task_sizes": ["small", "medium", "large"],
+  "tasks": {
+    "small": {
+      "task_id": "notice-export-content-disposition-ascii-fallback",
+      "definition": "Content-Disposition fallback ASCII whitelist hardening",
+      "scope": ["notice_export_service", "service test"]
+    },
+    "medium": {
+      "task_id": "notification-priority-dirty-input-degradation",
+      "definition": "Notification priority dirty-input stable degradation and enrich pure-function extraction",
+      "scope": ["service", "new test"]
+    },
+    "large": {
+      "task_id": "export-lease-thread-safe-success-cooldown",
+      "definition": "Thread-safe export lease with success-commit cooldown, wired into three routes and covering failure rollback",
+      "scope": ["service", "2 routes", "tests"]
+    }
+  },
+  "design": {
+    "arms": ["direct_codex", "delegated_deepseek"],
+    "repetitions_per_cell": 1,
+    "execution": "parallel",
+    "order_alternated": false,
+    "matches_queen_protocol": false,
+    "queen_protocol_requirement": "The queen protocol asks for at least three alternated repetitions per variant; this pilot must not be presented as that formal benchmark.",
+    "wall_time_used_for_token_reduction": false
+  },
+  "unit_conventions": {
+    "codex_total": "input + output, where input is inclusive of cached_input",
+    "codex_proxy": "(input - cached_input) + output",
+    "worker_total": "input + cache_read + output + reasoning",
+    "worker_proxy": "input + output",
+    "reduction_percent": "1 - compared_proxy / direct_proxy_total, rounded to two decimals",
+    "wall_time_seconds": "observed duration from the recorded wall_time_source; never used in token reduction calculations"
+  },
+  "direct_codex": {
+    "small": {
+      "commit": "90d84be225fe2751ed0583917e7391ff29245559",
+      "input": 554251,
+      "cached_input": 508032,
+      "output": 3508,
+      "reasoning": 1034,
+      "total": 557759,
+      "acceptance": true,
+      "corrections": 0,
+      "wall_time_seconds": 108.921,
+      "wall_time_source": "Codex session first-to-last timestamp",
+      "controller_acceptance": {
+        "tests_total": 32,
+        "ruff": "passed",
+        "format": "passed",
+        "diff": "passed"
+      }
+    },
+    "medium": {
+      "commit": "90d84be225fe2751ed0583917e7391ff29245559",
+      "input": 812011,
+      "cached_input": 751872,
+      "output": 7019,
+      "reasoning": 2209,
+      "total": 819030,
+      "acceptance": true,
+      "corrections": 0,
+      "wall_time_seconds": 178.325,
+      "wall_time_source": "Codex session first-to-last timestamp",
+      "controller_acceptance": {
+        "tests_total": 51,
+        "ruff": "passed",
+        "format": "passed",
+        "diff": "passed"
+      }
+    },
+    "large": {
+      "commit": "90d84be225fe2751ed0583917e7391ff29245559",
+      "input": 1696112,
+      "cached_input": 1626240,
+      "output": 15444,
+      "reasoning": 4958,
+      "total": 1711556,
+      "acceptance": true,
+      "corrections": 0,
+      "wall_time_seconds": 379.631,
+      "wall_time_source": "Codex session first-to-last timestamp",
+      "controller_acceptance": {
+        "tests_service": 21,
+        "tests_api": 49,
+        "ruff": "passed",
+        "format": "passed",
+        "diff": "passed"
+      }
+    }
+  },
+  "delegated_deepseek": {
+    "small": {
+      "commit": "90d84be225fe2751ed0583917e7391ff29245559",
+      "input": 26939,
+      "cache_read": 333952,
+      "output": 3475,
+      "reasoning": 1842,
+      "total": 366208,
+      "cost_usd": 0.008232906,
+      "acceptance": true,
+      "corrections": 0,
+      "usage_complete": true,
+      "wall_time_seconds": 210.517,
+      "wall_time_source": "worker creation through controller verification",
+      "controller_acceptance": {
+        "tests_total": 41,
+        "ruff": "passed",
+        "format": "passed",
+        "diff": "passed"
+      }
+    },
+    "medium": {
+      "commit": "90d84be225fe2751ed0583917e7391ff29245559",
+      "input": 27079,
+      "cache_read": 554240,
+      "output": 8597,
+      "reasoning": 3316,
+      "total": 593232,
+      "cost_usd": 0.01287237,
+      "acceptance": true,
+      "corrections": 0,
+      "usage_complete": false,
+      "wall_time_seconds": 414.657,
+      "wall_time_source": "worker creation through controller verification",
+      "controller_acceptance": {
+        "tests_total": 120,
+        "ruff": "passed",
+        "format": "passed",
+        "diff": "passed"
+      }
+    },
+    "large": {
+      "commit": "90d84be225fe2751ed0583917e7391ff29245559",
+      "input": 84304,
+      "cache_read": 5069568,
+      "output": 23944,
+      "reasoning": 18216,
+      "total": 5196032,
+      "cost_usd": 0.053150304,
+      "acceptance": true,
+      "corrections": 1,
+      "usage_complete": false,
+      "wall_time_seconds": 811.445,
+      "wall_time_source": "worker creation through controller verification",
+      "wall_time_includes_correction_rounds": 1,
+      "controller_acceptance": {
+        "tests_service": 25,
+        "tests_api": 53,
+        "ruff": "passed",
+        "format": "passed",
+        "diff": "passed"
+      }
+    }
+  },
+  "controller_interval": {
+    "description": "Codex controller increment from launching the six executions through acceptance of both arms",
+    "input": 6358712,
+    "cached_input": 6287488,
+    "output": 18933,
+    "reasoning": 6389,
+    "total": 6377645,
+    "noncached_input": 71224,
+    "proxy": 90157,
+    "includes": ["native control-arm management", "review of both arms"],
+    "pure_delegation_bill": false
+  },
+  "derived": {
+    "direct_proxy_total": 202201,
+    "worker_proxy_total": 174338,
+    "worker_proxy_reduction_vs_direct_percent": 13.78,
+    "controller_proxy_total": 90157,
+    "controller_proxy_reduction_vs_direct_percent": 55.41,
+    "direct_total_sum": 3088345,
+    "worker_total_sum": 6155472
+  },
+  "review_corrections": [
+    {
+      "arm": "delegated_deepseek",
+      "task_size": "large",
+      "rounds": 1,
+      "finding": "Codex review found the first revision let a stale lease break a new lease and let empty results enter cooldown.",
+      "resolution": "The worker corrected both defects; the revised patch passed review and independent verification and was accepted."
+    }
+  ],
+  "limitations": [
+    "One execution per size and arm; the arms ran in parallel and the order was not alternated, so this is not the repeated benchmark the queen protocol requests.",
+    "One repository, one task set, one model configuration and one date; results do not generalize and promise no fixed or billing-grade saving.",
+    "The controller interval covers launch of all six executions through acceptance of both arms, including native control-arm management and review of both arms, so it is not a pure delegation bill.",
+    "Worker usage for medium and large is marked usage_complete=false; those worker totals and costs may understate actual usage.",
+    "Worker total including cached reads (6155472) exceeds direct total (3088345), so combined tokens and latency can increase.",
+    "Both arms ran in parallel, so each wall time can include contention for the same machine and provider capacity; the durations are single observations, not a stable performance baseline.",
+    "This pilot is separate from the 2026-09-14 combined-token benchmark and must not be merged with it."
+  ]
+}

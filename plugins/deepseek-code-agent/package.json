@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "check": "node ./scripts/check-prereqs.mjs",
-    "test": "node --test ./tests/controller.test.mjs ./tests/mcp.test.mjs ./tests/workflow-core.test.mjs ./tests/verification.test.mjs",
+    "test": "node --test ./tests/controller.test.mjs ./tests/mcp.test.mjs ./tests/workflow-core.test.mjs ./tests/verification.test.mjs ./tests/routing-policy.test.mjs",
     "test:live": "node ./tests/live-smoke.mjs"
   },
   "engines": {
