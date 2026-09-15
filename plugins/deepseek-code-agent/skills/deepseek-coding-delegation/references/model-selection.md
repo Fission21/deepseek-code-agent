@@ -23,13 +23,17 @@ For the OpenCode lane, “以后 / 全局 / 设为默认 / 所有新执行者”
 
 The plugin cannot persist a Codex-native model default. A Luna request applies to the requested task or an explicitly established preference within the current Codex thread. Do not store Luna through `ds_model_defaults` or claim it will carry into future Codex tasks.
 
-“所有工蜂 / 全部 worker” is a fleet-scoped model instruction, not a new provider type. Apply it to every delegate created after the instruction within the stated task/thread scope. Existing native subagents and OpenCode workers retain their saved models, so replace rather than mutate them when necessary. A fleet-scoped model instruction overrides the automatic lane recommendation. It does not manufacture cross-lane capabilities: native Luna has no plugin-managed persistent session, isolated worktree, queued correction mailbox, fork, or persisted `task_spec`. If a request requires those capabilities and also mandates Luna for all workers, surface the incompatibility and preserve the explicit Luna choice instead of silently substituting DeepSeek/GLM.
+“所有工蜂 / 全部 worker” is a fleet-scoped model instruction, not a new provider type. Apply it to every delegate created after the instruction within the stated task/thread scope. Existing native subagents and OpenCode workers retain their saved models, so replace rather than mutate them when necessary. A fleet-scoped model instruction overrides the automatic lane recommendation. Native Luna can still use Codex's task-scoped message/follow-up queue, wait and interrupt controls, and it can work in an isolated Git worktree selected or prepared by Codex. Do not claim those orchestration capabilities belong to the model itself. OpenCode remains distinct when the task needs controller-persisted state discoverable across Codex tasks/restarts, OpenCode context forks, external-provider accounting, or persisted `task_spec` verification.
 
 ## Codex-native Luna lane
 
 `gpt-5.6-luna` is a Codex-native subagent model, not an OpenCode catalog model or a third plugin provider. Select it through Codex's native subagent capability and pass `reasoning_effort="max"` when the user did not specify an effort. Pass an explicitly requested effort unchanged; if the user explicitly asks for the host's “default/automatic” effort, omit the field for that request. Do not call `ds_check`, `ds_spawn_agent`, or `ds_model_defaults`; do not start OpenCode; and do not read or forward `DEEPSEEK_API_KEY` or other external credentials.
 
 The current host determines whether Luna and the requested effort are available. When unavailable, explain the limitation and keep the user's lane choice intact instead of falling back silently. A native subagent retains the model chosen when it was created; create a new subagent to change models. Codex still owns task design, authorization, diff review, independent verification and acceptance.
+
+Keep the native agent ID for the current Codex task. When the host exposes native message/follow-up, wait and interrupt operations, reuse that agent for coherent correction turns, including queuing input while it is busy. Do not describe this task-scoped lifecycle as guaranteed recovery after an app restart unless the active Codex host explicitly provides that guarantee.
+
+For isolation, use a host-native worktree/environment option when the native subagent interface exposes one. Otherwise Codex may create a dedicated Git worktree from the intended committed state before spawning and tell Luna to work only in that exact directory. A worktree does not include uncommitted changes; tasks that depend on them should remain in the current workspace with non-overlapping writes or run serially. Preserve reviewed changes before cleaning up a controller-created worktree. A user-visible Codex task/worktree is a separate workflow and may be created only when the user explicitly asks for a new task; do not use it as an implicit substitute for a hidden native worker.
 
 ## OpenCode worker persistent defaults
 
@@ -101,6 +105,7 @@ If the provider is disconnected, connect the chosen account. If a model is missi
 ## Sources
 
 - [OpenAI GPT-5.6 Luna model](https://developers.openai.com/api/docs/models/gpt-5.6-luna)
+- [OpenAI Agents subagent messages and lifecycle items](https://developers.openai.com/api/reference/typescript/resources/beta/subresources/agents/subresources/sessions/subresources/subagents/subresources/items/methods/list)
 - [OpenCode Go models and IDs](https://opencode.ai/docs/go/)
 - [OpenCode provider authentication](https://opencode.ai/docs/providers/#deepseek)
 - [OpenCode model configuration and variants](https://opencode.ai/docs/models/)
