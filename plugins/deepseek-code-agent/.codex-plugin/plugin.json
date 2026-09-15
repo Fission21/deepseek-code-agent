@@ -1,6 +1,6 @@
 {
   "name": "deepseek-code-agent",
-  "version": "0.1.0+codex.20260914100017",
+  "version": "0.1.0+codex.20260915081857",
   "description": "Delegate coding to persistent DeepSeek or GLM workers through OpenCode Go or the official DeepSeek API, with Codex review.",
   "author": {
     "name": "Fission21",

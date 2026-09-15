@@ -115,6 +115,49 @@ export const tools = [
           description:
             "Compact non-secret constraints selected by Codex. Do not paste full instruction files here.",
         },
+        task_spec: {
+          type: "object",
+          description:
+            "Optional v1 task design from Codex. Decisions, acceptance criteria, and check commands are rendered into the worker's initial task and the normalized spec is persisted for ds_verify_agent. Omit to keep the legacy prompt-only behavior.",
+          properties: {
+            version: { type: "integer", const: 1 },
+            design_decisions: {
+              type: "array",
+              items: { type: "string", minLength: 1, maxLength: 2000 },
+              maxItems: 50,
+            },
+            acceptance_criteria: {
+              type: "array",
+              items: { type: "string", minLength: 1, maxLength: 2000 },
+              maxItems: 50,
+            },
+            checks: {
+              type: "array",
+              maxItems: 20,
+              items: {
+                type: "object",
+                properties: {
+                  id: { type: "string", minLength: 1, maxLength: 100, description: "Unique check ID persisted for verification." },
+                  argv: {
+                    type: "array",
+                    items: { type: "string", minLength: 1 },
+                    minItems: 1,
+                    description: "Command and arguments. Empty entries and NUL characters are rejected.",
+                  },
+                  cwd: {
+                    type: "string", minLength: 1, maxLength: 500, default: ".",
+                    description: "Workspace-relative working directory; absolute paths and traversal are rejected.",
+                  },
+                  timeout_ms: { type: "integer", minimum: 1, maximum: 300000, default: 60000 },
+                },
+                required: ["id", "argv"],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ["version"],
+          additionalProperties: false,
+        },
       },
       required: ["task", "workspace"],
       additionalProperties: false,
@@ -125,6 +168,21 @@ export const tools = [
     description:
       "Get, set, or reset the persistent machine-wide model default for newly spawned workers. Existing workers keep their saved selection. set validates against the local OpenCode catalog before saving; get never writes.",
     inputSchema: modelDefaultsSchema,
+  },
+  {
+    name: "ds_verify_agent",
+    description:
+      "Run the task_spec checks persisted at spawn time for an idle worker. Never accepts commands from this call or from worker reports; starts a controller-local asynchronous job (wait up to 55s), returns job/check IDs, exit codes, timeout or cancellation indicators, and log file paths. Repeated calls return the same running/completed job; rerun=true starts a fresh job only when none is active.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        agent_id: agentID,
+        wait_ms: { type: "integer", minimum: 0, maximum: 55000, default: 0 },
+        rerun: { type: "boolean", default: false },
+      },
+      required: ["agent_id"],
+      additionalProperties: false,
+    },
   },
   {
     name: "ds_send_message",
@@ -152,6 +210,13 @@ export const tools = [
         cursor,
         timeout_ms: { type: "integer", minimum: 0, maximum: 55000, default: 30000 },
         detail,
+        return_on: {
+          type: "string",
+          enum: ["legacy", "actionable"],
+          default: "legacy",
+          description:
+            "legacy (default) keeps the historical payload behavior. actionable consumes transient provider retries internally and escalates to needs_attention with reason provider_retry_budget only after a continuous retry streak reaches 120000ms; an ordinary timeout then returns only agent_id, state=timed_out, and the cursor.",
+        },
       },
       required: ["agent_id"],
       additionalProperties: false,
@@ -243,6 +308,8 @@ export async function callTool(name, args = {}) {
       return await controller.check(args);
     case "ds_spawn_agent":
       return await controller.spawnAgent(args);
+    case "ds_verify_agent":
+      return await controller.verifyAgent(args);
     case "ds_model_defaults":
       return await controller.modelDefaults(args);
     case "ds_send_message":

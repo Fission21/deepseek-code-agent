@@ -8,7 +8,8 @@ Keep the first message concise and operational:
 
 ```text
 Objective:
-Known entry points or current behavior (omit if unknown):
+Known entry points and critical call chain:
+Design decisions and compatibility invariants:
 Allowed files or modules:
 Acceptance criteria:
 Required checks:
@@ -16,7 +17,7 @@ Do not:
 Return:
 ```
 
-Under `Return`, request a concise handoff with outcome, changed files, checks actually run, remaining risks and manifest acknowledgement. Assign discovery, implementation, tests and fixing failures together. The queen does not need to discover the full call chain first; pass paths and acceptance criteria rather than source files or a prewritten solution.
+Under `Return`, request a concise handoff with outcome, changed files, checks actually run, remaining risks and manifest acknowledgement. Assign implementation, tests and routine repairs together. Before delegation, Codex reads the critical call chain and decides interfaces, data flow, compatibility invariants and failure boundaries. Pass those decisions, focused paths and observable acceptance criteria; the worker can discover remaining local implementation details.
 
 Pass instruction routing separately from the prose capsule:
 
@@ -44,13 +45,37 @@ Pass instruction routing separately from the prose capsule:
 
 The worker must acknowledge each manifest path and hash in its result. Codex compares that acknowledgement before review. This detects stale or mismatched instruction versions, but it does not prove semantic compliance.
 
+## Structured task and verification
+
+For planned implementation, pass `task_spec` to `ds_spawn_agent`:
+
+```json
+{
+  "version": 1,
+  "design_decisions": ["Return a shallow copy; preserve nested object identity."],
+  "acceptance_criteria": ["The input dictionary is unchanged and existing labels stay compatible."],
+  "checks": [
+    {"id": "regression", "argv": ["python", "-m", "pytest", "tests/test_example.py", "-q"], "cwd": ".", "timeout_ms": 60000}
+  ]
+}
+```
+
+Use actual native executable paths available on the host (for Windows Python, normally the existing virtual environment's `python.exe`). Checks use argument arrays without shell expansion; Windows `.cmd` and `.bat` shims are rejected. `cwd` is workspace-relative and must stay inside it after symlink resolution. Do not place secrets in commands or task specifications. Commands are selected by Codex within the user's authorized task; never turn worker-provided shell text into a verification command.
+
+The specification is optional for compatibility. Without configured checks, verification cannot claim success. `ds_verify_agent({agent_id, wait_ms: 0})` starts or observes a verification job; bounded waits may be requested up to 55 seconds. Repeated calls return the same job. Use `rerun: true` only when deliberately requesting another check execution. Worker work and verification cannot run concurrently for the same agent.
+
+Results retain actual exit codes and complete log paths outside the worker workspace. Compare the source snapshot and instruction/specification identity: edits during checks or after a pass invalidate it. Git snapshots cover HEAD, tracked changes and nonignored untracked content; nongit snapshots explicitly cover declared scope. Ignored inputs outside the declared snapshot are not independently attested. Passing process checks does not prove semantic instruction compliance or replace Codex review.
+
+To repair a failed review, send a single batch of evidenced issues. After two unsuccessful review correction rounds, interrupt and confirm the worker/verification stopped before Codex edits the shared workspace. Preserve all attempts in measurement and keep the configured model unchanged.
+
 ## Tool lifecycle
 
 - `ds_model_defaults`: get, set or reset the local machine default for subsequent workers. Change it only for a persistent model-setting request; existing agents keep their selection. See [model selection](model-selection.md) for natural-language scope and precedence.
 
 - `ds_check`: check Node, OpenCode and the selected provider/model configuration; pass the same provider, model, variant and workspace as the planned spawn. This does not verify credentials, balance or inference. See [model selection](model-selection.md).
 - `ds_spawn_agent`: create a persistent OpenCode session and immediately submit the initial task. Save `agent_id`, `cursor`, and `worktree` from the result.
-- `ds_wait_agent`: use `timeout_ms=55000` and the returned cursor. Default `detail="compact"` suppresses intermediate messages, task echoes and repeated manifests. Treat cursors as opaque: revision information preserves same-message streaming updates. Do not reconstruct a cursor from a message ID. On timeout, retain the new cursor and wait again.
+- `ds_wait_agent`: use `return_on="actionable"`, `timeout_ms=55000` and the returned cursor for this workflow. Compact timeouts contain only the necessary state. Transient retries stay inside the bounded wait; a continuous 120-second retry streak escalates to `needs_attention`. Completion/failure/permissions/questions keep precedence. Omitted `return_on` retains legacy behavior. Treat cursors as opaque; retain them across timeouts.
+- `ds_verify_agent`: execute only the persisted, Codex-selected checks while the worker is idle; observe the existing job on repeated calls, explicitly rerun when needed. Read actual exit codes, full log paths and snapshot validity before review. Inspect never starts verification.
 - `ds_send_message`: continue the same context. When the agent is busy, the bridge queues the message and sends it at the next idle boundary.
 - `ds_inspect_agent`: compact status and final handoff by default; completion/failure includes cumulative worker usage. Unchanged waits omit repeated usage and workspace metadata. Request `detail="full"` for recent messages and the instruction manifest; `include_diff=true` explicitly requests the diff. If a handoff is truncated or lacks a required acknowledgement, inspect full without the consumed cursor to retrieve that evidence. Full message text retains the bridge per-part truncation limit; inspect the actual files for larger evidence.
 - `ds_fork_agent`: fork the conversation from its current or specified message. A fork shares the same filesystem, so do not run parent and child concurrently.

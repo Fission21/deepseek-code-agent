@@ -142,6 +142,14 @@ Codex selects the relevant repository instructions, passes bounded `scope_paths`
 
 ## Queen token efficiency
 
+### Design, implement, verify, review
+
+Codex reads the critical call chain and decides interfaces, invariants and acceptance cases before delegation. An optional `task_spec` gives the worker those decisions and the exact check commands. The worker completes implementation, self-tests and routine repairs in one session. Codex reviews the patch and batches feedback; after two unsuccessful correction rounds it can take over after confirming the worker and verification have stopped.
+
+`ds_verify_agent` runs only the persisted checks while the worker is idle, retaining exit codes and full logs. Verification is bound to the current source, Git index, task specification and instruction identity; edits invalidate earlier evidence. Repeated calls observe the same asynchronous job; `rerun=true` explicitly requests another execution. `ds_wait_agent(return_on="actionable")` absorbs transient retries and escalates a continuous 120-second retry streak. The 55-second wait and 65-second host timeout remain. Existing calls without the new options keep their prior behavior.
+
+See the [task and evidence contract](plugins/deepseek-code-agent/skills/deepseek-coding-delegation/references/control-contract.md). This update has local functional tests; no new model comparison was run, so token savings and latency improvements remain unmeasured.
+
 The default workflow reserves **queen (Codex) judgment** for intent, consequential design choices, uncertain diagnoses, risk-focused review and acceptance. The worker handles high-volume discovery, editing, tests, routine fixes, documentation and evidence preparation within scope. Queen token savings should come from offloading labor while preserving quality. Delegate a coherent unit of work and reuse its session for corrections. Tiny known edits can still cost less to do directly.
 
 `ds_wait_agent` and `ds_inspect_agent` default to compact responses: status, attention requests, cumulative worker usage and a bounded final handoff. Task echoes, intermediate tool logs and repeated instruction manifests stay out of the queen's normal context. Use `detail="full"` for diagnosis or omitted evidence and `include_diff=true` when the diff is needed. Save the spawn manifest once and reuse returned cursors.

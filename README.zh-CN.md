@@ -149,6 +149,14 @@ Codex 会选择相关仓库规则，传入明确的 `scope_paths`、任务相关
 
 ## Queen Token 优化
 
+### Codex 设计与审核，GLM 实现
+
+Codex 先阅读关键调用链，明确接口、必须保持的行为和验收案例，通过可选 `task_spec` 一次交付设计决定和检查命令。执行模型在同一会话中完成实现、自测和常规修复，Codex 集中审核并批量反馈；两轮修正仍未通过时，确认 worker 和验收进程停止后再接管。
+
+新增 `ds_verify_agent`：只在 worker 空闲时运行预先保存的检查，保留退出码和完整日志，并将结果绑定到源码、Git 暂存区、任务规范和指令身份。代码变化会使旧证据失效；重复查询只读取同一异步任务，显式设置 `rerun=true` 才重新执行。`ds_wait_agent(return_on="actionable")` 在程序内处理短暂重试，连续重试 120 秒后升级为需处理事件。55 秒等待和 65 秒宿主超时保持不变，旧调用兼容。
+
+详见[任务与验收契约](plugins/deepseek-code-agent/skills/deepseek-coding-delegation/references/control-contract.md)。本次完成本地功能验证，未进行新的模型对比实测，因此尚不声称达到具体的 Token 节省比例或耗时目标。
+
 默认流程让 **queen（Codex）专注于最影响质量的判断**：理解需求、关键设计与取舍、疑难诊断、风险审查和最终验收。工蜂承担量大的代码探索、实现、测试、常规修复、文档和证据整理。省 queen Token 应该来自把这些工作交出去，同时保持质量。一次委派一个完整行为，纠错复用同一会话；已知的小改动仍可直接完成。
 
 `ds_wait_agent` 和 `ds_inspect_agent` 默认只返回精简状态、待处理请求、执行者累计用量和有长度上限的最终交付摘要。普通等待不再带回任务回声、工具过程日志或重复指令清单。需要诊断或补全证据时使用 `detail="full"`，需要 diff 时显式设置 `include_diff=true`。保存首次 spawn 的清单，并持续复用返回的 cursor。

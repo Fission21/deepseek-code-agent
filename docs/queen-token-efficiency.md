@@ -6,10 +6,12 @@ The goal is not a queen that rubber-stamps a short report. The goal is a queen t
 
 ## What changed
 
-- Delegate one coherent behavior with observable acceptance criteria; do not make the queen solve the implementation before dispatch.
+- Codex reads the critical call chain and decides interfaces, data flow, invariants and acceptance cases before dispatch. Delegate a complete implementation with those decisions in `task_spec`; the worker handles the remaining local details.
 - Default wait/inspect responses omit task echoes, progress/tool logs and repeated instruction manifests. A bounded final report and worker usage remain available; full diagnostics are explicit.
 - Preserve attention and failure signals. Revision-aware cursors must not lose a final result when a streamed message completes under the same message ID.
-- Ask the worker to verify and fix before handoff. The queen reviews the diff and performs focused independent acceptance checks, with evidence-driven corrections to the same session.
+- The worker self-tests and fixes before handoff. `ds_verify_agent` separately runs the preselected checks, preserving full logs and source-bound evidence; inspection never executes checks. The queen reviews the actual diff and current evidence, then batches corrections to the same session. After two unsuccessful correction rounds, stop and confirm the worker and verification have exited before takeover.
+- `return_on="actionable"` absorbs transient retries and escalates a continuous 120-second streak. The 55-second wait and 65-second host timeout remain; this version does not provide proactive completion wakeups.
+- This update was functionally tested locally. No new model comparison was run; the token savings and latency goals remain unmeasured. Historical measurements below describe their original versions and must not be treated as current-version results.
 
 ## Two different measurements
 

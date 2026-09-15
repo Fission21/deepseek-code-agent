@@ -46,6 +46,10 @@ The live test makes a small request to the selected model in a temporary Git rep
 
 ## Routing expectation
 
-Optimize queen (Codex) tokens by handing a coherent implementation unit to the worker, including discovery, tests and fixes. Codex supplies acceptance criteria and reviews the patch. Compact wait/inspect responses are the default; request `detail="full"` only when specific diagnostic evidence is missing. Tiny edits can be handled directly.
+Codex decides the design, interfaces, invariants and acceptance cases. A persistent worker implements that plan, self-tests and fixes routine failures. Codex reviews the scoped patch and gives one batch of feedback; after two unsuccessful review correction rounds it may take over, after confirming the worker and verification have stopped. Tiny edits can be handled directly.
 
-Payload size is not end-to-end token usage. Measure actual queen tokens against a matched direct baseline, including failures and correction turns. Keep DS tokens, latency and quality separate; combined tokens may increase. See [the measurement protocol](../../docs/queen-token-efficiency.md) and the preserved historical benchmark in the repository.
+`ds_spawn_agent` accepts an optional structured `task_spec`. `ds_verify_agent` runs its preselected commands and preserves full logs, binding results to a source snapshot. Verification can run beyond one MCP wait window; repeated calls observe the same job rather than executing checks again. Inspect remains read-only. Neither worker completion nor passing checks means Codex has accepted the patch.
+
+Use `return_on="actionable"` with `ds_wait_agent` to absorb transient provider retries. Continuous retries over 120 seconds become an attention event. The 55-second wait limit and 65-second host timeout remain; normal timeouts still require another wait. Legacy callers retain their previous behavior.
+
+Payload size is not end-to-end token usage. Measure actual Codex input/cached input/output and all correction or takeover turns; keep worker tokens, latency and quality separate. These token counters do not directly represent subscription quota. See [the control and evidence contract](skills/deepseek-coding-delegation/references/control-contract.md). Local automated tests do not prove token savings; live benchmarks are only run when requested.

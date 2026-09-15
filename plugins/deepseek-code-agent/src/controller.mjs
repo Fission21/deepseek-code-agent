@@ -4,6 +4,16 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import {
+  captureSnapshot,
+  executeCheck,
+  outOfScopePaths,
+  resolveCheckCwd,
+  sha256Text,
+  snapshotChangedPaths,
+  terminateChild,
+} from "./verification.mjs";
+
 export const PROVIDER_ID = "opencode-go";
 export const MODEL_ID = "deepseek-v4.1-flash";
 export const VARIANT = "max";
@@ -105,6 +115,13 @@ const REPORT_TRUNCATION_MARKER =
   "\n[truncated; call ds_inspect_agent with detail=full to read the complete report]";
 const CURSOR_REVISION_PATTERN = /^[0-9a-f]{8,64}$/i;
 const INSTRUCTION_FILE_NAMES = ["AGENTS.override.md", "AGENTS.md"];
+const RETRY_BUDGET_MS = 120_000;
+const TASK_SPEC_MAX_STRING = 2000;
+const TASK_SPEC_MAX_LIST = 50;
+const TASK_SPEC_MAX_CHECKS = 20;
+const TASK_SPEC_MAX_TIMEOUT_MS = 300_000;
+const TASK_SPEC_DEFAULT_TIMEOUT_MS = 60_000;
+const TASK_SPEC_MAX_ID = 100;
 
 export const WORKER_SYSTEM_PROMPT = `You are the implementation worker supervised by Codex.
 Before editing, read every file in the controller-provided instruction manifest and follow it. Do not scan unrelated policy documents unless the task or a listed instruction routes you to them.
@@ -112,6 +129,134 @@ Work only on the assigned objective and scope. Treat controller-provided critica
 Do not commit, push, merge, deploy, modify production data, expose credentials, or discard unrelated changes.
 Own high-volume discovery, implementation, tests, routine fixes, documentation and evidence preparation within scope; do not narrate each step back to the controller. Make routine implementation decisions independently. Escalate blocking consequential choices with options, tradeoffs, your recommendation and evidence so the queen can decide.
 Finish with a handoff of at most 1500 characters that states the outcome, changed files, the checks actually run with results, remaining risks, and the instruction manifest acknowledgement (path, sha256, read scope) for every listed file.`;
+
+export function normalizeTaskSpec(input) {
+  if (input === undefined || input === null) return null;
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new Error("task_spec must be an object");
+  }
+  const unknown = Object.keys(input).filter(
+    (key) => !["version", "design_decisions", "acceptance_criteria", "checks"].includes(key),
+  );
+  if (unknown.length) {
+    throw new Error(`task_spec has unknown fields: ${unknown.join(", ")}`);
+  }
+  if (input.version !== 1) {
+    throw new Error("task_spec.version must be 1");
+  }
+  const boundedList = (value, field) => {
+    if (value === undefined) return [];
+    if (!Array.isArray(value)) throw new Error(`task_spec.${field} must be an array of strings`);
+    if (value.length > TASK_SPEC_MAX_LIST) {
+      throw new Error(`task_spec.${field} allows at most ${TASK_SPEC_MAX_LIST} entries`);
+    }
+    return value.map((entry) => {
+      if (typeof entry !== "string" || !entry.trim() || entry.length > TASK_SPEC_MAX_STRING) {
+        throw new Error(
+          `task_spec.${field} entries must be non-empty strings of at most ${TASK_SPEC_MAX_STRING} characters`,
+        );
+      }
+      return entry.trim();
+    });
+  };
+  const design_decisions = boundedList(input.design_decisions, "design_decisions");
+  const acceptance_criteria = boundedList(input.acceptance_criteria, "acceptance_criteria");
+  let checks = [];
+  if (input.checks !== undefined) {
+    if (!Array.isArray(input.checks)) throw new Error("task_spec.checks must be an array");
+    if (input.checks.length > TASK_SPEC_MAX_CHECKS) {
+      throw new Error(`task_spec.checks allows at most ${TASK_SPEC_MAX_CHECKS} checks`);
+    }
+    const seenIDs = new Set();
+    checks = input.checks.map((check) => {
+      if (!check || typeof check !== "object" || Array.isArray(check)) {
+        throw new Error("task_spec.checks entries must be objects");
+      }
+      const unknownCheck = Object.keys(check).filter(
+        (key) => !["id", "argv", "cwd", "timeout_ms"].includes(key),
+      );
+      if (unknownCheck.length) {
+        throw new Error(`task_spec.checks entry has unknown fields: ${unknownCheck.join(", ")}`);
+      }
+      if (typeof check.id !== "string" || !check.id.trim() || check.id.length > TASK_SPEC_MAX_ID) {
+        throw new Error(
+          `task_spec.checks ids must be non-empty strings of at most ${TASK_SPEC_MAX_ID} characters`,
+        );
+      }
+      if (seenIDs.has(check.id)) {
+        throw new Error(`task_spec.checks ids must be unique: ${check.id}`);
+      }
+      seenIDs.add(check.id);
+      if (
+        !Array.isArray(check.argv) ||
+        check.argv.length === 0 ||
+        check.argv.some(
+          (part) =>
+            typeof part !== "string" || part.length === 0 || part.includes("\0"),
+        )
+      ) {
+        throw new Error("task_spec.checks argv must be a non-empty array of non-empty strings without NUL");
+      }
+      if (check.argv.some((part) => part.length > TASK_SPEC_MAX_STRING)) {
+        throw new Error(`task_spec.checks argv entries must be at most ${TASK_SPEC_MAX_STRING} characters`);
+      }
+      const normalizedCwd = normalizeCheckCwd(check.cwd);
+      const rawTimeout = check.timeout_ms ?? TASK_SPEC_DEFAULT_TIMEOUT_MS;
+      const timeout =
+        typeof rawTimeout === "number" && Number.isInteger(rawTimeout)
+          ? rawTimeout
+          : Number.NaN;
+      if (!Number.isFinite(timeout) || timeout <= 0 || timeout > TASK_SPEC_MAX_TIMEOUT_MS) {
+        throw new Error(
+          `task_spec.checks timeout_ms must be an integer between 1 and ${TASK_SPEC_MAX_TIMEOUT_MS}`,
+        );
+      }
+      return { id: check.id, argv: [...check.argv], cwd: normalizedCwd, timeout_ms: timeout };
+    });
+  }
+  return { version: 1, design_decisions, acceptance_criteria, checks };
+}
+
+function normalizeCheckCwd(value) {
+  if (value === undefined || value === null) return ".";
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error("task_spec.checks cwd must be a non-empty relative path");
+  }
+  if (value.includes("\0")) throw new Error("task_spec.checks cwd must not contain NUL");
+  const portable = value.trim().replaceAll("\\", "/");
+  if (path.posix.isAbsolute(portable) || /^[A-Za-z]:\//.test(portable)) {
+    throw new Error("task_spec.checks cwd must be workspace-relative, not absolute");
+  }
+  const normalized = path.posix.normalize(portable);
+  if (normalized === ".." || normalized.startsWith("../")) {
+    throw new Error("task_spec.checks cwd must stay inside the workspace");
+  }
+  return normalized === "" ? "." : normalized;
+}
+
+export function renderTaskSpecSection(taskSpec) {
+  if (!taskSpec) return "";
+  const lines = ["", "Task specification (v1)", ""];
+  lines.push("Design decisions (authoritative; do not second-guess):");
+  lines.push(renderBulletList(taskSpec.design_decisions, "None supplied."));
+  lines.push("");
+  lines.push("Acceptance criteria:");
+  lines.push(renderBulletList(taskSpec.acceptance_criteria, "None supplied."));
+  if (taskSpec.checks.length) {
+    lines.push("");
+    lines.push("Required checks (run these yourself and fix failures before handing off):");
+    for (const check of taskSpec.checks) {
+      lines.push(
+        `- ${check.id}: cwd=${check.cwd} timeout_ms=${check.timeout_ms} argv=${JSON.stringify(check.argv)}`,
+      );
+    }
+    lines.push("");
+    lines.push(
+      "Implement autonomously, self-test, and fix failures yourself; escalate only an actual conflict in the design above. Return a single concise handoff.",
+    );
+  }
+  return lines.join("\n");
+}
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -135,19 +280,6 @@ export function commandInvocation(
     };
   }
   return { command, args };
-}
-
-function terminateChild(child) {
-  if (!child || child.killed) return;
-  if (process.platform === "win32" && child.pid) {
-    const killer = spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    killer.unref();
-    return;
-  }
-  child.kill("SIGTERM");
 }
 
 function basicAuth(username, password) {
@@ -332,12 +464,13 @@ function renderBulletList(values, emptyText) {
   return values.length ? values.map((value) => `- ${value}`).join("\n") : `- ${emptyText}`;
 }
 
-export function buildInitialTask({ task, scopePaths, criticalConstraints, instructionManifest }) {
+export function buildInitialTask({ task, scopePaths, criticalConstraints, instructionManifest, taskSpec }) {
   const manifestLines = instructionManifest.files.map(
     (file) =>
       `- ${file.path} | sha256=${file.sha256} | bytes=${file.bytes} | ` +
       (file.sections.length ? `sections=${JSON.stringify(file.sections)}` : "read=full"),
   );
+  const specSection = taskSpec ? renderTaskSpecSection(taskSpec) : "";
   return `${task.trim()}
 
 Controller instruction packet
@@ -350,7 +483,7 @@ ${renderBulletList(criticalConstraints, "No additional controller summary; repos
 
 Required instruction manifest (${instructionManifest.total_bytes} bytes total):
 ${renderBulletList(manifestLines, "No repository instruction file was discovered or explicitly selected.")}
-
+${specSection}
 Before editing, read every listed instruction from this workspace. Read a full file only when its entry says read=full; otherwise locate and read the named sections with enough surrounding context to apply them correctly. Do not paste instruction contents into the response. In the final response, repeat each manifest path, sha256, and read scope so Codex can compare it with this controller-generated manifest.`;
 }
 
@@ -858,6 +991,75 @@ export class DeepSeekController {
     );
     this.server = null;
     this.serverPromise = null;
+    this.generations = new Map();
+    this.locks = new Map();
+    this.retryStreaks = new Map();
+    this.verifyJobs = new Map();
+    this.stopping = new Set();
+    this.now = options.now ?? (() => Date.now());
+    this.checkSpawn = options.checkSpawn ?? spawn;
+    this.terminateCheck = options.terminateCheck ?? terminateChild;
+  }
+
+  isVerifyActive(agentID) {
+    const job = this.verifyJobs.get(agentID);
+    return Boolean(job && job.status === "running");
+  }
+
+  assertNoActiveVerification(agentID) {
+    if (this.isVerifyActive(agentID) || this.stopping.has(agentID)) {
+      throw new Error(
+        "ds_verify_agent is running for this agent; wait for it to finish before sending messages, submitting, or forking",
+      );
+    }
+  }
+
+  assertNotClosed(state) {
+    if (state.status === "closed") {
+      throw new Error(
+        `Agent ${state.agent_id} is closed; it can no longer receive queued messages, forks, or verification`,
+      );
+    }
+  }
+
+  cancelVerification(agentID, reason = "cancelled") {
+    const job = this.verifyJobs.get(agentID);
+    if (job && job.status === "running") {
+      job.cancelRequested = true;
+      job.cancelReason = reason;
+      job.cancelChild?.();
+      return true;
+    }
+    return false;
+  }
+
+  currentGeneration(agentID) {
+    return this.generations.get(agentID) ?? 0;
+  }
+
+  bumpGeneration(agentID) {
+    const next = this.currentGeneration(agentID) + 1;
+    this.generations.set(agentID, next);
+    return next;
+  }
+
+  async runExclusive(key, fn) {
+    const previous = this.locks.get(key) ?? Promise.resolve();
+    let release;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    this.locks.set(key, previous.then(() => gate));
+    await previous;
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  }
+
+  withAgentLock(agentID, fn) {
+    return this.runExclusive(`agent:${agentID}`, fn);
   }
 
   defaultsPath() {
@@ -1178,6 +1380,29 @@ export class DeepSeekController {
     return { directory, sourceRoot, workspaceMode, tempRoot };
   }
 
+  async captureSourceSnapshot({ root, scopePaths, taskSpec, instructionManifest }) {
+    try {
+      return await captureSnapshot({
+        root,
+        scopePaths,
+        taskSpec,
+        instructionManifest,
+        stateRoot: this.stateRoot,
+        gitRunner: (args) => this.runCommand("git", ["-C", root, ...args], { timeoutMs: 15_000 }),
+      });
+    } catch (error) {
+      return {
+        coverage: "unavailable",
+        head: null,
+        entries: {},
+        instruction_hashes: {},
+        spec_digest: taskSpec ? sha256Text(JSON.stringify(taskSpec)) : null,
+        digest: null,
+        note: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
   async stateDirectory() {
     const directory = path.join(this.stateRoot, "agents");
     await fs.mkdir(directory, { recursive: true, mode: 0o700 });
@@ -1275,7 +1500,26 @@ export class DeepSeekController {
     return true;
   }
 
+  async maybeFlushQueued(state, generation) {
+    const agentID = state.agent_id;
+    return await this.withAgentLock(agentID, async () => {
+      state = await this.readState(agentID);
+      if (this.currentGeneration(agentID) !== generation) return false;
+      if (state.status === "closed") return false;
+      if (this.isVerifyActive(agentID) || this.stopping.has(agentID)) return false;
+      const [status, count] = await Promise.all([
+        this.rawStatus(state),
+        this.queueCount(agentID),
+      ]);
+      if (status.type !== "idle" || count === 0) return false;
+      if (this.currentGeneration(agentID) !== generation) return false;
+      return await this.flushOne(state);
+    });
+  }
+
   async submit(state, text) {
+    this.assertNotClosed(state);
+    this.assertNoActiveVerification(state.agent_id);
     const selection = selectionForState(state);
     await this.request("POST", `/session/${state.agent_id}/prompt_async`, {
       directory: state.directory,
@@ -1297,6 +1541,7 @@ export class DeepSeekController {
     scope_paths = [],
     required_reads = [],
     critical_constraints = [],
+    task_spec,
     provider,
     model,
     variant,
@@ -1316,6 +1561,7 @@ export class DeepSeekController {
     if (!Array.isArray(required_reads)) {
       throw new Error("required_reads must be an array");
     }
+    const taskSpec = normalizeTaskSpec(task_spec);
     const selection = await this.resolveSelection({ provider, model, variant });
     const sourceDirectory = await fs.realpath(workspace);
     await this.requireModel(selection, sourceDirectory);
@@ -1324,6 +1570,7 @@ export class DeepSeekController {
     let instructionManifest;
     let normalizedConstraints;
     let initialTask;
+    let sourceSnapshot = null;
     try {
       // A worktree can have different committed provider settings from the source checkout.
       if (prepared.directory !== sourceDirectory) await this.requireModel(selection, prepared.directory);
@@ -1336,11 +1583,23 @@ export class DeepSeekController {
         requiredReads: required_reads,
       });
       normalizedConstraints = critical_constraints.map((value) => value.trim()).filter(Boolean);
+      if (taskSpec) {
+        for (const check of taskSpec.checks) {
+          await resolveCheckCwd(prepared.directory, check.cwd);
+        }
+      }
+      if (taskSpec) sourceSnapshot = await this.captureSourceSnapshot({
+        root: prepared.directory,
+        scopePaths: normalizedScopePaths,
+        taskSpec,
+        instructionManifest,
+      });
       initialTask = buildInitialTask({
         task,
         scopePaths: normalizedScopePaths,
         criticalConstraints: normalizedConstraints,
         instructionManifest,
+        taskSpec,
       });
     } catch (error) {
       try {
@@ -1376,6 +1635,9 @@ export class DeepSeekController {
       title: session.title,
       scope_paths: normalizedScopePaths,
       instruction_manifest: instructionManifest,
+      task_spec: taskSpec,
+      source_snapshot: sourceSnapshot,
+      verify: null,
       model_selection: selection,
     };
     await this.writeState(state);
@@ -1390,6 +1652,11 @@ export class DeepSeekController {
       source_root: state.source_root,
       scope_paths: state.scope_paths,
       instruction_manifest: state.instruction_manifest,
+      task_spec: state.task_spec ?? null,
+      source_snapshot: {
+        coverage: state.source_snapshot?.coverage ?? "unavailable",
+        digest: state.source_snapshot?.digest ?? null,
+      },
       ...selectionSummary(state),
     };
   }
@@ -1436,7 +1703,10 @@ export class DeepSeekController {
 
   async sendMessage({ agent_id, message, queue_if_busy = true }) {
     if (typeof message !== "string" || !message.trim()) throw new Error("message is required");
+    return this.withAgentLock(agent_id, async () => {
     const state = await this.readState(agent_id);
+    this.assertNotClosed(state);
+    this.assertNoActiveVerification(agent_id);
     const status = await this.rawStatus(state);
     if (status.type !== "idle") {
       if (!queue_if_busy) {
@@ -1451,34 +1721,457 @@ export class DeepSeekController {
     }
     await this.submit(state, message.trim());
     return { agent_id, state: "running", queued_messages: await this.queueCount(agent_id) };
+    });
   }
 
-  async waitAgent({ agent_id, cursor = null, timeout_ms = 30_000, detail = "compact" }) {
+  async waitAgent({
+    agent_id,
+    cursor = null,
+    timeout_ms = 30_000,
+    detail = "compact",
+    return_on = "legacy",
+  }) {
+    if (return_on !== "legacy" && return_on !== "actionable") {
+      throw new Error('return_on must be "legacy" or "actionable"');
+    }
     const timeout = boundedInteger(timeout_ms, 30_000, 0, MAX_WAIT_MS);
-    const deadline = Date.now() + timeout;
+    const deadline = this.now() + timeout;
     const mode = detail === "full" ? "full" : "compact";
+    const actionable = return_on === "actionable";
+    const generation = this.currentGeneration(agent_id);
     while (true) {
       const data = await this.collect(agent_id, cursor);
+      if (this.currentGeneration(agent_id) !== generation) {
+        if (actionable) {
+          return { agent_id, state: "timed_out", cursor: payloadCursor(data) };
+        }
+        return { ...this.renderPayload(data, mode), state: "timed_out" };
+      }
       if (data.bridgeState === "needs_attention") {
-        return this.renderPayload(data, mode);
+        return await this.maybeWithReview(data, mode);
+      }
+      if (actionable && data.rawStatus?.type === "retry") {
+        const streakStart = this.retryStreaks.get(agent_id) ?? this.now();
+        this.retryStreaks.set(agent_id, streakStart);
+        const streakMs = this.now() - streakStart;
+        if (streakMs >= RETRY_BUDGET_MS) {
+          return {
+            agent_id,
+            state: "needs_attention",
+            reason: "provider_retry_budget",
+            retry: { ...data.rawStatus, retry_streak_ms: streakMs },
+            cursor: payloadCursor(data),
+          };
+        }
+      } else if (actionable) {
+        this.retryStreaks.delete(agent_id);
       }
       if (data.rawStatus?.type === "idle" && data.queuedMessages > 0) {
-        await this.flushOne(data.state);
+        await this.maybeFlushQueued(data.state, generation);
       } else if (
         data.bridgeState === "completed" ||
-        data.bridgeState === "retry" ||
-        data.bridgeState === "failed"
+        data.bridgeState === "failed" ||
+        (!actionable && data.bridgeState === "retry")
       ) {
-        return this.renderPayload(data, mode);
+        return await this.maybeWithReview(data, mode);
       }
-      if (Date.now() >= deadline) {
+      if (this.now() >= deadline) {
         const final = await this.collect(agent_id, cursor);
-        const terminal = new Set(["completed", "retry", "failed", "needs_attention"]);
-        if (terminal.has(final.bridgeState)) return this.renderPayload(final, mode);
+        const terminal = new Set(["completed", "failed", "needs_attention"]);
+        if (!actionable) terminal.add("retry");
+        if (terminal.has(final.bridgeState)) return await this.maybeWithReview(final, mode);
+        if (actionable) {
+          return { agent_id, state: "timed_out", cursor: payloadCursor(final) };
+        }
         return { ...this.renderPayload(final, mode), state: "timed_out" };
       }
-      await delay(Math.min(POLL_MS, Math.max(1, deadline - Date.now())));
+      await delay(Math.min(POLL_MS, Math.max(1, deadline - this.now())));
     }
+  }
+
+  async verifyAgent({ agent_id, wait_ms = 0, rerun = false } = {}) {
+    assertAgentID(agent_id);
+    const state = await this.readState(agent_id);
+    if (!state.task_spec || !state.task_spec.checks?.length) {
+      throw new Error(
+        "Agent has no persisted task_spec checks to verify; spawn with task_spec to enable ds_verify_agent",
+      );
+    }
+    this.assertNotClosed(state);
+    const wait = boundedInteger(wait_ms, 0, 0, MAX_WAIT_MS);
+    let job = await this.startVerification(state, rerun);
+    const deadline = this.now() + wait;
+    while (job.status === "running" && this.now() < deadline) {
+      await delay(Math.min(POLL_MS, Math.max(1, deadline - this.now())));
+      job = this.verifyJobs.get(agent_id) ?? job;
+    }
+    return this.verifyJobPayload(state, job);
+  }
+
+  async loadLatestJob(agentID) {
+    const directory = path.join(this.stateRoot, "verify", agentID);
+    let files;
+    try {
+      files = await fs.readdir(directory);
+    } catch (error) {
+      if (error?.code === "ENOENT") return null;
+      throw error;
+    }
+    const records = [];
+    for (const file of files.filter((name) => name.endsWith(".json"))) {
+      try {
+        records.push(JSON.parse(await fs.readFile(path.join(directory, file), "utf8")));
+      } catch {
+        // Ignore unreadable job records; fresh verifications replace them.
+      }
+    }
+    records.sort((a, b) => (b.started_at ?? 0) - (a.started_at ?? 0));
+    const latest = records[0];
+    if (!latest) return null;
+    if (latest.status === "running") {
+      latest.status = "error";
+      latest.error = "controller restarted while verification was running";
+      latest.finished_at = this.now();
+    }
+    this.verifyJobs.set(agentID, latest);
+    return latest;
+  }
+
+  async startVerification(state, rerun = false) {
+    const agentID = state.agent_id;
+    return await this.withAgentLock(agentID, async () => {
+      state = await this.readState(agentID);
+      this.assertNotClosed(state);
+      if (this.stopping.has(agentID)) throw new Error("worker is stopping; wait before verification");
+      const existing = this.verifyJobs.get(agentID) ?? await this.loadLatestJob(agentID);
+      if (existing && (existing.status === "running" || !rerun)) return existing;
+      const [status, pending, queued] = await Promise.all([
+        this.rawStatus(state),
+        this.pending(state),
+        this.queueCount(agentID),
+      ]);
+      if (status.type !== "idle") {
+        throw new Error(
+          `Worker must be idle before verification (current status: ${status.type}); interrupt or wait first. An abort request alone is not proof the worker is idle.`,
+        );
+      }
+      if (queued > 0) {
+        throw new Error(
+          `Worker has ${queued} queued message(s); drain the queue before verification so checks cannot race follow-up submissions`,
+        );
+      }
+      if (pending.permissions.length || pending.questions.length) {
+        throw new Error(
+          "Worker has pending permission/question requests; answer them before verification",
+        );
+      }
+      const job = {
+        job_id: `ver_${Date.now().toString(36)}_${randomBytes(6).toString("hex")}`,
+        agent_id: agentID,
+        status: "running",
+        started_at: this.now(),
+        cancelRequested: false,
+        results: [],
+      };
+      this.verifyJobs.set(agentID, job);
+      state.verify = { latest_job_id: job.job_id, latest_status: "running" };
+      await this.writeState(state);
+      await this.persistJob(job);
+      job.done = this.runVerificationJob(state, job);
+      return job;
+    });
+  }
+
+  async runVerificationJob(state, job) {
+    const agentID = state.agent_id;
+    try {
+      const logDir = path.join(this.stateRoot, "verify", agentID, job.job_id);
+      await fs.mkdir(path.join(logDir, "logs"), { recursive: true, mode: 0o700 });
+      job.log_dir = logDir;
+      const snapshotArgs = {
+        root: state.directory,
+        scopePaths: state.scope_paths ?? [],
+        taskSpec: state.task_spec,
+        instructionManifest: state.instruction_manifest,
+      };
+      const before = await this.captureSourceSnapshot(snapshotArgs);
+      job.before_digest = before.digest ?? null;
+      const results = [];
+      for (const [index, check] of (state.task_spec.checks ?? []).entries()) {
+        if (job.cancelRequested) {
+          results.push({
+            id: check.id,
+            command: check.argv.join(" "),
+            exit_code: null,
+            timed_out: false,
+            cancelled: true,
+            skipped: true,
+            log_path: null,
+            duration_ms: 0,
+          });
+          continue;
+        }
+        const logPath = path.join(logDir, "logs", `${String(index + 1).padStart(3, "0")}.log`);
+        const result = await executeCheck({
+          check,
+          workspaceRoot: state.directory,
+          logPath,
+          spawnFn: (command, args, options) => this.checkSpawn(command, args, options),
+          terminateFn: this.terminateCheck,
+          isCancelled: () => job.cancelRequested,
+          onChild: (child) => {
+            job.cancelChild = () => this.terminateCheck(child);
+          },
+        });
+        results.push({ ...result, log_path: logPath });
+        job.results = [...results];
+      }
+      job.results = results;
+      let after = null;
+      if (!job.cancelRequested) {
+        after = await this.captureSourceSnapshot(snapshotArgs);
+        job.after_digest = after.digest ?? null;
+      }
+      await this.withAgentLock(agentID, async () => {
+        await this.finalizeVerificationJob(state, job, before, after);
+      });
+    } catch (error) {
+      await this.withAgentLock(agentID, async () => {
+        job.status = "error";
+        job.error = error instanceof Error ? error.message : String(error);
+        job.finished_at = this.now();
+        try {
+          const fresh = await this.readState(agentID);
+          fresh.verify = { latest_job_id: job.job_id, latest_status: "error" };
+          await this.writeState(fresh);
+          await this.persistJob(job);
+        } catch (persistError) {
+          job.error += `; evidence persistence failed: ${persistError.message}`;
+        }
+      });
+    }
+    return job;
+  }
+
+  async finalizeVerificationJob(state, job, before, after) {
+    const results = job.results ?? [];
+    const cancelled = job.cancelRequested;
+    const allPassed =
+      !cancelled &&
+      results.length > 0 &&
+      results.every(
+        (result) =>
+          result.exit_code === 0 &&
+          !result.timed_out &&
+          !result.cancelled &&
+          !result.refused &&
+          !result.error,
+      );
+    const evidence = {
+      verified: false,
+      reasons: [],
+      before_digest: job.before_digest ?? null,
+      after_digest: job.after_digest ?? null,
+      digest_unchanged: null,
+      changed_paths: null,
+      out_of_scope_changes: [],
+      worker_idle: null,
+    };
+    let status;
+    if (cancelled) {
+      status = "cancelled";
+      evidence.reasons.push(
+        job.cancelReason ? `verification cancelled: ${job.cancelReason}` : "verification cancelled",
+      );
+    } else if (!allPassed) {
+      status = "failed";
+      for (const result of results) {
+        if (result.exit_code !== 0 || result.timed_out || result.cancelled || result.refused || result.error) {
+          evidence.reasons.push(
+            `check ${result.id}: ${result.error ?? (result.timed_out ? "timed out" : result.refused ? "refused" : `exit code ${result.exit_code}`)}`,
+          );
+        }
+      }
+    } else {
+      status = "passed";
+      const available =
+        Boolean(
+          before &&
+            before.coverage !== "unavailable" &&
+            after &&
+            after.coverage !== "unavailable",
+        ) &&
+        Boolean(state.source_snapshot && state.source_snapshot.coverage !== "unavailable");
+      if (!available) {
+        evidence.reasons.push("source snapshot unavailable; checks are not bound to source");
+      } else {
+        evidence.digest_unchanged = before.digest === after.digest;
+        if (!evidence.digest_unchanged) {
+          evidence.reasons.push("verification checks changed the source tree");
+        }
+        const changed = snapshotChangedPaths(state.source_snapshot, after) ?? [];
+        evidence.changed_paths = changed;
+        evidence.out_of_scope_changes = outOfScopePaths(changed, state.scope_paths ?? []);
+        if (evidence.out_of_scope_changes.length) {
+          evidence.reasons.push(
+            `changes outside scope_paths: ${evidence.out_of_scope_changes.slice(0, 20).join(", ")}`,
+          );
+        }
+      }
+      let raw;
+      try {
+        raw = await this.rawStatus(state);
+      } catch {
+        raw = { type: "unknown" };
+      }
+      evidence.worker_idle = raw.type === "idle";
+      if (!evidence.worker_idle) evidence.reasons.push("worker is not idle after verification");
+      evidence.verified =
+        available &&
+        evidence.digest_unchanged === true &&
+        evidence.out_of_scope_changes.length === 0 &&
+        evidence.worker_idle;
+    }
+    job.status = status;
+    job.evidence = evidence;
+    job.finished_at = this.now();
+    const fresh = await this.readState(state.agent_id);
+    fresh.verify = {
+      latest_job_id: job.job_id,
+      latest_status: status,
+      latest_finished_at: job.finished_at,
+    };
+    if (status === "passed" && evidence.verified) {
+      fresh.verify.evidence = {
+        job_id: job.job_id,
+        after_digest: evidence.after_digest,
+        result_ids: results.map((result) => result.id),
+        log_dir: job.log_dir,
+        finished_at: job.finished_at,
+      };
+    }
+    await this.writeState(fresh);
+    await this.persistJob(job);
+  }
+
+  async persistJob(job) {
+    const directory = path.join(this.stateRoot, "verify", job.agent_id);
+    await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+    const record = { ...job };
+    delete record.cancelChild;
+    delete record.done;
+    await fs.writeFile(
+      path.join(directory, `${job.job_id}.json`),
+      `${JSON.stringify(record, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+  }
+
+  async verifyJobPayload(state, job) {
+    state = await this.readState(state.agent_id);
+    const review = await this.buildReviewSummary(state, {
+      rawStatus: await this.rawStatus(state),
+      queuedMessages: await this.queueCount(state.agent_id),
+    });
+    const current = review?.verification.evidence_current === true;
+    return {
+      agent_id: job.agent_id,
+      job_id: job.job_id,
+      status: job.status,
+      started_at: job.started_at ?? null,
+      finished_at: job.finished_at ?? null,
+      log_dir: job.log_dir ?? null,
+      evidence_path: path.join(this.stateRoot, "verify", job.agent_id, `${job.job_id}.json`),
+      ...(job.error ? { error: job.error } : {}),
+      results: (job.results ?? []).map((result) => ({
+        id: result.id,
+        command: result.command,
+        exit_code: result.exit_code ?? null,
+        timed_out: Boolean(result.timed_out),
+        cancelled: Boolean(result.cancelled),
+        ...(result.refused ? { refused: true } : {}),
+        ...(result.error ? { error: result.error } : {}),
+        duration_ms: result.duration_ms ?? null,
+        log_path: result.log_path ?? null,
+      })),
+      ...(job.error ? { error: job.error } : {}),
+      evidence: job.evidence ? { ...job.evidence, verified: job.evidence.verified && current, current } : null,
+      review,
+      note: "Process checks are automated evidence only; Codex review acceptance is still required.",
+    };
+  }
+
+  async buildReviewSummary(state, data) {
+    if (!state?.task_spec) return undefined;
+    let fresh = null;
+    try {
+      fresh = await this.captureSourceSnapshot({
+        root: state.directory,
+        scopePaths: state.scope_paths ?? [],
+        taskSpec: state.task_spec,
+        instructionManifest: state.instruction_manifest,
+      });
+    } catch {
+      fresh = null;
+    }
+    const spawnSnapshot = state.source_snapshot ?? null;
+    const available =
+      Boolean(fresh && fresh.coverage !== "unavailable") &&
+      Boolean(spawnSnapshot && spawnSnapshot.coverage !== "unavailable");
+    const changedPaths = available ? (snapshotChangedPaths(spawnSnapshot, fresh) ?? []) : [];
+    const outOfScope = available ? outOfScopePaths(changedPaths, state.scope_paths ?? []) : [];
+    const evidence = state.verify?.evidence ?? null;
+    const latestJob = this.verifyJobs.get(state.agent_id) ?? await this.loadLatestJob(state.agent_id);
+    const digestMatch = Boolean(
+      evidence && fresh?.digest && evidence.after_digest === fresh.digest,
+    );
+    const workerIdle = data?.rawStatus?.type === "idle";
+    const verification = {
+      latest_job_id: state.verify?.latest_job_id ?? null,
+      latest_status: state.verify?.latest_status ?? "not_run",
+      evidence_cached: Boolean(evidence),
+      evidence_current:
+        Boolean(evidence) && available && digestMatch && workerIdle &&
+        state.verify?.latest_job_id === evidence.job_id && state.verify?.latest_status === "passed" &&
+        !this.isVerifyActive(state.agent_id) && !this.stopping.has(state.agent_id) &&
+        !(data?.queuedMessages > 0),
+      result_ids: evidence?.result_ids ?? [],
+      log_dir: latestJob?.log_dir ?? evidence?.log_dir ?? null,
+      evidence_path: latestJob ? path.join(this.stateRoot, "verify", state.agent_id, `${latestJob.job_id}.json`) : null,
+      checks: (latestJob?.results ?? []).map(result => ({
+        id: result.id, exit_code: result.exit_code ?? null,
+        timed_out: Boolean(result.timed_out), cancelled: Boolean(result.cancelled),
+        error: result.error ?? null, log_path: result.log_path ?? null,
+      })),
+    };
+    if (!available) {
+      verification.note = "source snapshot unavailable; changes are not verified";
+    }
+    return {
+      source_snapshot: {
+        coverage: fresh?.coverage ?? "unavailable",
+        available,
+      },
+      changed_paths: (changedPaths ?? []).slice(0, 100),
+      changed_path_count: changedPaths.length,
+      changed_paths_truncated: changedPaths.length > 100,
+      out_of_scope_changes: outOfScope.slice(0, 100),
+      unresolved: [
+        ...(!available ? ["source snapshot unavailable"] : []),
+        ...(latestJob?.evidence?.reasons ?? []),
+        ...(latestJob?.error ? [latestJob.error] : []),
+        ...(evidence && !verification.evidence_current ? ["previous verification is no longer current"] : []),
+      ],
+      verification,
+      note: "Process checks are automated evidence only; Codex review acceptance is still required.",
+    };
+  }
+
+  async maybeWithReview(data, mode) {
+    const payload = this.renderPayload(data, mode);
+    const review = await this.buildReviewSummary(data.state, data);
+    if (review) payload.review = review;
+    return payload;
   }
 
   async inspectAgent({
@@ -1491,6 +2184,8 @@ export class DeepSeekController {
     const data = await this.collect(agent_id, cursor);
     const mode = detail === "full" ? "full" : "compact";
     const result = this.renderPayload(data, mode, boundedInteger(message_limit, 20, 1, 100));
+    const review = await this.buildReviewSummary(data.state, data);
+    if (review) result.review = review;
     if (include_diff) {
       result.diff = await this.request("GET", `/session/${agent_id}/diff`, {
         directory: data.state.directory,
@@ -1500,7 +2195,10 @@ export class DeepSeekController {
   }
 
   async forkAgent({ agent_id, message_id = null }) {
+    return this.withAgentLock(agent_id, async () => {
     const state = await this.readState(agent_id);
+    this.assertNotClosed(state);
+    this.assertNoActiveVerification(agent_id);
     const status = await this.rawStatus(state);
     if (status.type !== "idle") throw new Error("Interrupt or wait for the parent before forking");
     const forked = await this.request("POST", `/session/${agent_id}/fork`, {
@@ -1515,6 +2213,7 @@ export class DeepSeekController {
       owns_worktree: false,
       created_at: Date.now(),
       title: forked.title,
+      verify: null,
     };
     await this.writeState(child);
     return {
@@ -1526,15 +2225,38 @@ export class DeepSeekController {
       ...selectionSummary(child),
       warning: "The fork shares the parent's filesystem. Run parent and child sequentially.",
     };
+    });
   }
 
   async interruptAgent({ agent_id }) {
+    await this.beginStop(agent_id, "worker interrupted");
+    await this.awaitVerificationExit(agent_id);
+    this.stopping.delete(agent_id);
+    return { agent_id, state: "interrupted" };
+  }
+
+  async beginStop(agent_id, reason) {
+    return this.withAgentLock(agent_id, async () => {
     const state = await this.readState(agent_id);
+    this.stopping.add(agent_id);
+    this.bumpGeneration(agent_id);
+    this.cancelVerification(agent_id, reason);
     await this.request("POST", `/session/${agent_id}/abort`, {
       directory: state.directory,
       body: {},
     });
-    return { agent_id, state: "interrupted" };
+    });
+  }
+
+  async awaitVerificationExit(agentID, timeoutMs = 10_000) {
+    const job = this.verifyJobs.get(agentID);
+    if (!job || job.status !== "running" || !job.done) return;
+    let timer;
+    try {
+      await Promise.race([job.done, new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("verification process has not stopped; writes remain blocked")), timeoutMs);
+      })]);
+    } finally { clearTimeout(timer); }
   }
 
   async replyAgent({ agent_id, kind, request_id, reply, answers, message }) {
@@ -1605,17 +2327,13 @@ export class DeepSeekController {
   }
 
   async closeAgent({ agent_id, remove_worktree = false }) {
+    await this.beginStop(agent_id, "worker closed");
+    await this.awaitVerificationExit(agent_id);
     const state = await this.readState(agent_id);
-    try {
-      await this.request("POST", `/session/${agent_id}/abort`, {
-        directory: state.directory,
-        body: {},
-      });
-    } catch {
-      // The session may already be idle or its server may have restarted.
-    }
     let removedWorktree = false;
     if (remove_worktree) {
+      const status = await this.rawStatus(state);
+      if (status.type !== "idle") throw new Error("worker has not stopped; refusing worktree removal");
       if (state.workspace_mode !== "worktree" || !state.temp_root) {
         throw new Error("Refusing to remove a workspace not created by this bridge");
       }
@@ -1648,10 +2366,12 @@ export class DeepSeekController {
     state.closed_at = Date.now();
     state.worktree_removed = removedWorktree;
     await this.writeState(state);
+    this.stopping.delete(agent_id);
     return { agent_id, state: "closed", worktree_removed: removedWorktree };
   }
 
   shutdown() {
+    for (const agentID of this.verifyJobs.keys()) this.cancelVerification(agentID, "controller shutdown");
     if (this.server?.child && !this.server.child.killed) {
       terminateChild(this.server.child);
     }
