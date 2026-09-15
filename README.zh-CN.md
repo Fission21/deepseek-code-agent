@@ -2,6 +2,8 @@
 
 [English](./README.md) | 简体中文
 
+**证据状态：** 这是可选的委派实验工具，尚未证明能稳定减少主控 Token。紧密关联的读取分析与诊断默认由 Codex 直接完成。一次读取型对照观察到 Queen Token 少 5.25%，但耗时增加 62.01%，质量和实验干扰因素仍有局限，详见[实测结果与限制](./docs/reading-delegation-retest-2026-09-15.md)。桥接回传变短是独立的传输优化，不等于 Token 节省。
+
 支持把范围明确的编码工作交给 Codex 原生 GPT-5.6 Luna 子 Agent，也支持通过 OpenCode Go 使用 DeepSeek、GLM，或通过 OpenCode 执行器直连 DeepSeek 官方 API。Codex 始终保持主控、审核和最终决定权。
 
 随插件提供的 Skill 会在 Codex 直接处理、原生 Luna 子 Agent 和插件的持久 OpenCode Worker 之间选择。插件为 OpenCode 通道提供持久会话、信箱式纠正、状态等待、上下文 fork、权限请求处理、隔离 Git worktree、diff 检查和定向仓库规则清单。
@@ -167,21 +169,21 @@ npm --prefix plugins/deepseek-code-agent run test:live
 
 ## Queen Token 优化
 
-### 按任务复杂度路由
+### 按预期收益与任务复杂度路由
 
-路由依据判断量、风险以及探索与验证负担，而不是行数或文件数。**小型**已知改动几分钟可完成，由 Codex 直接处理；**中型**机械实现且验收标准清晰时优先委派：范围明确、风险较低的原生子任务优先使用 `gpt-5.6-luna`，当前任务内的连续纠错、消息队列和由 Codex 管理的独立 worktree 也可以继续走 Luna。用户明确选择 DeepSeek/GLM，或任务确实需要跨任务/重启发现、控制器状态落盘、OpenCode 上下文 fork、外部 Provider 用量记录或持久化 `task_spec` 验收时，再优先 OpenCode Worker。**大型或高风险**任务（状态机、并发、权限、事务、迁移等）只能把边界明确的劳动交给任一通道，Codex 必须先确定设计、接口、不变量、失败语义和验收案例，再审查实际 diff 并独立验证。绝不按 Worker 自报或自测通过来接受；用户对本次或全部工蜂的明确模型选择优先于自动路由，任何失败都不能触发静默跨通道降级。
+路由依据预期能省下的 Queen 工作、风险以及探索与验证负担，而不是行数或文件数。**小型**已知改动，以及紧密关联的读取分析、诊断，默认由 Codex 直接完成，尤其是 Queen 复核时仍需重做大部分调查的情况。**中型**重复实现或独立资料批次可以考虑委派，但预期省下的 Queen 工作应能抵消派发、审查和纠错成本，并符合时间约束；收益不明确就直接做。读取量大、模型便宜或有空闲并发位，都不是单独成立的委派理由，也不要求先跑基准才能路由。确定值得委派后，范围明确、风险较低的原生子任务优先使用 `gpt-5.6-luna`，当前任务内的连续纠错、消息队列和由 Codex 管理的独立 worktree 也可以继续走 Luna。用户明确选择 DeepSeek/GLM，或任务确实需要跨任务/重启发现、控制器状态落盘、OpenCode 上下文 fork、外部 Provider 用量记录或持久化 `task_spec` 验收时，再优先 OpenCode Worker。**大型或高风险**任务（状态机、并发、权限、事务、迁移等）只能把边界明确的劳动交给任一通道。用户需求的解释、关键决定和最终验收由 Codex 保留；涉及改代码的委派前，Codex 先核查约束范围内的关键契约和设计不变量。已确定值得委派的只读探索，不要求 Queen 派发前先重复读完整条调用链。绝不按 Worker 自报或自测通过来接受；用户对本次或全部工蜂的明确模型选择优先于自动路由，任何失败都不能触发静默跨通道降级。
 
 2026-09-15 的 pilot 在同一基线 commit 上为每个规模各做了一次 Codex 直接执行与委派 DeepSeek 执行：[任务分级 pilot](./docs/task-routing-pilot-2026-09-15.md)。它没有测试 Luna。每格仅一次、双臂并行、顺序未交替，因此它不是 queen 协议要求的三次重复正式基准，结果不能推广，也不承诺固定节省。该 pilot 中，worker 非缓存输入加输出合计比三次 direct 低 13.78%，controller 自身区间的 proxy 比 direct proxy 合计低 55.41%；controller 区间也包含管理 Codex 直接执行对照组和审查两组结果，不能当作纯委派账单。计入缓存后 worker total 高于 direct total，总 Token 和耗时仍可能增加；medium 和 large 的 worker 用量标记为不完整。
 
-### Codex 设计与审核，Luna 或 OpenCode Worker 实现
+### 确定值得委派后：Codex 设计与审核，工蜂执行
 
-Codex 先阅读关键调用链，明确接口、必须保持的行为和验收案例。原生 Luna 子 Agent 通过 Codex 自身的委派通道接收一个边界明确的任务；OpenCode Worker 还可以接收持久化 `task_spec`、worktree 和精确检查命令。两条通道都必须由 Codex 审查实际补丁并独立验收；OpenCode 原有纠错生命周期保持不变。
+Codex 保留用户需求解释、关键设计取舍和最终验收。路由判断支持委派时，工蜂可以先做有范围的只读探索、索引或资料整理。例如：“读取相关 service 和测试，只返回带范围/版本的证据包：结论、源码/测试定位、关键短摘录，以及未核查或不确定项；不要修改文件。”涉及改代码前，Codex 核查关键契约和设计不变量，再给出边界明确的目标与验收案例。原生 Luna 子 Agent 通过 Codex 自身的委派通道接收任务；OpenCode Worker 还可以接收持久化 `task_spec`、worktree 和精确检查命令。普通读取和实现不需要逐步汇报，只在有意义的阻塞时升级，并把普通问题合并反馈。Codex 按风险关键处和缺口独立核查实际补丁，不重做全部探索，也不只凭摘要签收；OpenCode 原有纠错生命周期保持不变。
 
-新增 `ds_verify_agent`：只在 worker 空闲时运行预先保存的检查，保留退出码和完整日志，并将结果绑定到源码、Git 暂存区、任务规范和指令身份。代码变化会使旧证据失效；重复查询只读取同一异步任务，显式设置 `rerun=true` 才重新执行。`ds_wait_agent(return_on="actionable")` 在程序内处理短暂重试，连续重试 120 秒后升级为需处理事件。55 秒等待和 65 秒宿主超时保持不变，旧调用兼容。
+新增 `ds_verify_agent`：只在 worker 空闲时运行预先保存的检查，保留退出码和完整日志，并将结果绑定到源码、Git 暂存区、任务规范和指令身份。代码变化会使旧证据失效；重复查询只读取同一异步任务，显式设置 `rerun=true` 才重新执行。`ds_wait_agent(return_on="actionable")` 在程序内处理短暂重试，连续重试 120 秒后升级为需处理事件。使用宿主支持的有界等待：55 秒等待和 65 秒宿主超时保持不变，超时可能需要再次进行有界等待；不承诺零轮询、重启后仍自动完成或后台唤醒，旧调用兼容。
 
-详见[任务与验收契约](plugins/deepseek-code-agent/skills/deepseek-coding-delegation/references/control-contract.md)。本次完成本地功能验证，未进行新的模型对比实测，因此尚不声称达到具体的 Token 节省比例或耗时目标。
+详见[任务与验收契约](plugins/deepseek-code-agent/skills/deepseek-coding-delegation/references/control-contract.md)。原历史更新当时完成了本地功能验证，但没有附带模型对比实测；之后有日期的 pilot 或复测应单独记录，不能把这句变成对当前版本永远成立的结论。
 
-默认流程让 **queen（Codex）专注于最影响质量的判断**：理解需求、关键设计与取舍、疑难诊断、风险审查和最终验收。Luna 或 OpenCode Worker 承担量大的代码探索、实现、测试、常规修复、文档和证据整理。省 queen Token 应该来自把这些工作交出去，同时保持质量。一次委派一个完整行为；OpenCode 纠错复用持久会话，原生 Luna 更换模型时新建子 Agent。已知的小改动仍可直接完成。
+默认流程让 **queen（Codex）专注于最影响质量的判断**：理解需求、关键设计与取舍、疑难诊断、风险审查和最终验收。值得委派时，Luna 或 OpenCode Worker 承担范围内的探索、实现、测试、常规修复、文档和证据整理。选择性读取、批量工具输出和精简汇报同样适用于 Queen 直接做，不需要为了降噪先开工蜂。优化目标是主控总 Token（`input + output`）；若报告的 `input` 已含缓存输入，不得再次相加。未缓存输入加输出只作为另列的 proxy，工蜂用量也单独记录；不要求合计 Token 或耗时更低。一次委派一个完整行为；OpenCode 纠错复用持久会话，原生 Luna 更换模型时新建子 Agent。不能仅因读取量大就委派；指定工蜂模型也不等于必须创建工蜂。
 
 `ds_wait_agent` 和 `ds_inspect_agent` 默认只返回精简状态、待处理请求、执行者累计用量和有长度上限的最终交付摘要。普通等待不再带回任务回声、工具过程日志或重复指令清单。需要诊断或补全证据时使用 `detail="full"`，需要 diff 时显式设置 `include_diff=true`。保存首次 spawn 的清单，并持续复用返回的 cursor。
 

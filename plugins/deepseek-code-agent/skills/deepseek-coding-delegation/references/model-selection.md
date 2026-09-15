@@ -1,6 +1,6 @@
 # Worker lanes, models and authentication
 
-Read this when selecting the Codex-native Luna lane or an OpenCode model, configuring external authentication, or diagnosing a missing model. The `ds_*` names and plugin ID remain unchanged for compatibility.
+Read this for detailed model/default selection or scope changes, external authentication, or a missing model. An ordinary native Luna task with the explicit defaults in SKILL.md does not require this reference. The `ds_*` names and plugin ID remain unchanged for compatibility.
 
 ## Natural-language requests and scope
 

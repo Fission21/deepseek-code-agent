@@ -1,0 +1,236 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-15",
+  "experiment": "single-pair read-heavy controller-token retest",
+  "source_commit": "4e2cbdf48eef1e17d3aeb86781b415bf9081dfa3",
+  "skill_revision": {
+    "before": {
+      "bytes": 17211,
+      "sha256": "046f14dfc11eed876557128d742b0bfb3809451dc012d7bd8b2dbb0b969084bc"
+    },
+    "after": {
+      "bytes": 9637,
+      "sha256": "a78e1c9e3480879c17567a6e829031931585342cd12ce16c43584b568e7b5730"
+    }
+  },
+  "corpus": [
+    {
+      "path": "plugins/deepseek-code-agent/src/controller.mjs",
+      "sha256": "9eedd1b5555d8d56beb3e5fc67d8ac398253b9578ade6cf8c168983f9633b589"
+    },
+    {
+      "path": "plugins/deepseek-code-agent/src/verification.mjs",
+      "sha256": "487c4533c743f3e602bea2ca99ba37fd6b1a469edbe1253ce8defe4da0855c1b"
+    },
+    {
+      "path": "plugins/deepseek-code-agent/server.mjs",
+      "sha256": "2fee7e64dc2c77703c9b1406bcd5ba6bbc8e73ffe88b0b5bc7a8a82c04af44e0"
+    },
+    {
+      "path": "plugins/deepseek-code-agent/tests/controller.test.mjs",
+      "sha256": "95443c36bd5dc2eb07f8af13c68503501e3f071fca81a1042bd53c204ba2a8f3"
+    },
+    {
+      "path": "plugins/deepseek-code-agent/tests/verification.test.mjs",
+      "sha256": "7400036cf7c4833554b06d5ac6481499f40662542fc54bcb0745cea195de2ef5"
+    },
+    {
+      "path": "plugins/deepseek-code-agent/tests/workflow-core.test.mjs",
+      "sha256": "8bf614ed82e433f88c584e6eba209766d28d02761d0fc16aac08a17696f525d1"
+    },
+    {
+      "path": "plugins/deepseek-code-agent/tests/mcp.test.mjs",
+      "sha256": "b1f195c8c70eca665b0184aa9506ca65898e54ee7566f45afa38a7af02f011bc"
+    }
+  ],
+  "accounting": {
+    "root_setup_and_scoring_excluded": true,
+    "input_includes_cached_input": true,
+    "reasoning_is_output_subset": true,
+    "not_billing_or_quota": true
+  },
+  "sessions": [
+    {
+      "role": "direct_queen",
+      "models": [
+        "gpt-6-astra"
+      ],
+      "efforts": [
+        "max"
+      ],
+      "fresh_context": true,
+      "completed": true,
+      "usage": {
+        "input_tokens": 1146659,
+        "cached_input_tokens": 1060096,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 14478,
+        "reasoning_output_tokens": 6071,
+        "total_tokens": 1161137
+      },
+      "ledger_thread_usage_matches": true,
+      "uncached_input_plus_output_proxy": 101041,
+      "tool_call_count": 13,
+      "tool_call_counts": {
+        "exec": 13
+      },
+      "elapsed_seconds": 492.86,
+      "final_message_characters": 10316,
+      "final_message_sha256": "58f9124189511b3e2b6fdf0bd9bb8d972d623e3b9ffb7c4dd79c52cb742b6bc1"
+    },
+    {
+      "role": "delegated_queen",
+      "models": [
+        "gpt-6-astra"
+      ],
+      "efforts": [
+        "max"
+      ],
+      "fresh_context": true,
+      "completed": true,
+      "usage": {
+        "input_tokens": 1087919,
+        "cached_input_tokens": 1018368,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 12276,
+        "reasoning_output_tokens": 5333,
+        "total_tokens": 1100195
+      },
+      "ledger_thread_usage_matches": true,
+      "uncached_input_plus_output_proxy": 81827,
+      "tool_call_count": 18,
+      "tool_call_counts": {
+        "exec": 10,
+        "spawn_agent": 1,
+        "wait_agent": 6,
+        "followup_task": 1
+      },
+      "elapsed_seconds": 798.504,
+      "final_message_characters": 2675,
+      "final_message_sha256": "29a3a9882fe6904aa4740d4297d5abad20e102eee741590df19e9a9481e5b94d"
+    },
+    {
+      "role": "luna_worker",
+      "models": [
+        "gpt-5.6-luna"
+      ],
+      "efforts": [
+        "max"
+      ],
+      "fresh_context": true,
+      "completed": true,
+      "usage": {
+        "input_tokens": 4087989,
+        "cached_input_tokens": 3915520,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 20141,
+        "reasoning_output_tokens": 12160,
+        "total_tokens": 4108130
+      },
+      "ledger_thread_usage_matches": true,
+      "uncached_input_plus_output_proxy": 192610,
+      "tool_call_count": 39,
+      "tool_call_counts": {
+        "exec": 39
+      },
+      "elapsed_seconds": 480.048,
+      "final_message_characters": 814,
+      "final_message_sha256": "860bfed689966871a88825ac3a74ca7190ae71aff2a624dcd7b51792f8f22d17"
+    }
+  ],
+  "metrics": {
+    "controller_saved_tokens": 60942,
+    "controller_saved_fraction": 0.052484762779930416,
+    "secondary_proxy_saved_fraction": 0.19016042992448612,
+    "latency_ratio": 1.6201436513411516,
+    "combined_delegated_total": 5208325
+  },
+  "historical_comparison": {
+    "old_delegated_controller_total": 1414925,
+    "new_delegated_controller_total": 1100195,
+    "old_delegated_to_new_saved_fraction": 0.22243581815290558,
+    "old_direct_controller_total": 1166164,
+    "new_direct_controller_total": 1161137,
+    "corpus_hashes_match_prior_pilot": true
+  },
+  "acceptance": {
+    "rubric": "acceptance-checklist.md sealed before either report",
+    "core_topics_covered": {
+      "direct": 12,
+      "delegated": 12
+    },
+    "checklist_score": {
+      "direct": 11.5,
+      "delegated": 11.5,
+      "maximum": 12
+    },
+    "scores": {
+      "direct": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        0.5
+      ],
+      "delegated": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        0.5,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "safety_gate_passed": {
+      "direct": true,
+      "delegated": true
+    },
+    "accepted_core_investigation": {
+      "direct": true,
+      "delegated": true
+    },
+    "detail_omissions": {
+      "direct": "Item 12 does not explicitly state that the parent must be idle when creating the fork; shared-directory and per-agent-lock limitations are correctly preserved.",
+      "delegated": "Item 6 does not explicitly state the 55-second maximum per wait; the 120-second continuous-retry escalation and ordinary timeout behavior are correctly preserved."
+    },
+    "root_required_repair_turns": 0,
+    "delegated_queen_worker_supplement_requests": 1,
+    "quality_parity_proven": false,
+    "method": "Root inspected both sealed reports and independently checked critical implementation and source references. Prior verified source understanding was reusable because all seven corpus hashes matched. Scores are coverage checks, not proof of exhaustive equality. Omitted details did not reverse the core conclusions and the original reports were not rewritten.",
+    "runtime_scenarios_executed_in_comparison": false
+  },
+  "validation": {
+    "offline_tests": {
+      "passed": 115,
+      "skipped": 1,
+      "failed": 0,
+      "skip": "external prerequisite check requires DEEPSEEK_LIVE_PREREQ=1"
+    },
+    "skill_validator_passed": true,
+    "plugin_validator_passed": true,
+    "installed_plugin_version": "0.1.0+codex.20260915113613"
+  },
+  "limitations": [
+    "One pair; no estimate of statistical reliability or general savings.",
+    "All twelve core topics covered; detail omissions mean quality parity is not established.",
+    "Final report length and citation style differ; no post-hoc token normalization.",
+    "Possible model, caching and concurrent runtime variation.",
+    "Code/test definitions inspected; runtime scenarios not exercised by the comparison arms.",
+    "Luna only; no DeepSeek/GLM inference measured.",
+    "Worker tokens excluded from Queen metric, not claimed to be free.",
+    "Setup/scoring/reporting outside measured arms; not net savings of the whole outer conversation."
+  ]
+}

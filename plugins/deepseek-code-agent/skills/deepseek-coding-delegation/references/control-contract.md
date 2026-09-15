@@ -17,7 +17,7 @@ Do not:
 Return:
 ```
 
-Under `Return`, request a concise handoff with outcome, changed files, checks actually run, remaining risks and manifest acknowledgement. Assign implementation, tests and routine repairs together. Before delegation, Codex reads the critical call chain and decides interfaces, data flow, compatibility invariants and failure boundaries. Pass those decisions, focused paths and observable acceptance criteria; the worker can discover remaining local implementation details.
+Under `Return`, request a concise handoff with outcome, changed files, checks actually run, remaining risks and manifest acknowledgement. Assign implementation, tests and routine repairs together. Before implementation, Codex checks the critical contracts and decides interfaces, data flow, compatibility invariants and failure boundaries. Only after delegation is justified by the routing decision in SKILL.md, use bounded discovery with questions, scope and an evidence-packet requirement; unfamiliarity or reading volume alone does not require a worker. For such delegated discovery, do not require Codex to repeat the investigation before dispatch. The queen verifies consequential source evidence and decides the design before code changes. Omit implementation-only fields and executable checks for a purely read-only discovery task when they do not apply.
 
 Pass instruction routing separately from the prose capsule:
 

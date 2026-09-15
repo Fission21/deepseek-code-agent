@@ -1,6 +1,6 @@
 interface:
   display_name: "DeepSeek Coding Delegation"
-  short_description: "Delegate coding to DeepSeek or GLM and review it"
-  default_prompt: "Use $deepseek-coding-delegation to delegate this coding goal and review the result."
+  short_description: "Choose Codex or Luna/DeepSeek/GLM by task benefit"
+  default_prompt: "Use $deepseek-coding-delegation to choose direct Codex work or a bounded worker based on expected Queen-token benefit, preserving review and verification."
 policy:
   allow_implicit_invocation: true
