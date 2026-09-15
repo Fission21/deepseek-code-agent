@@ -10,6 +10,8 @@ Use normal language with Codex; it translates the request into the plugin's type
 |---|---|
 | “这段实现用 Codex 原生 GPT-5.6 Luna，推理开到 medium” | Create a task-scoped native `gpt-5.6-luna` subagent with `reasoning_effort="medium"`; do not use `ds_*`, OpenCode or external credentials |
 | “不要用外部 Provider，这次改用原生 Luna，推理拉满” | Create a task-scoped native `gpt-5.6-luna / max` subagent; fail explicitly if unavailable |
+| “当前任务所有工蜂都用 5.6 Luna” | Use native `gpt-5.6-luna / max` for every new delegate in the current task; existing workers are not mutated |
+| “本次全部工蜂使用 GLM 5.3 Flash” | Use `opencode-go / glm-5.3-flash / max` for every new OpenCode worker in the current task; keep the machine default |
 | “使用 OpenCode Go 的 GLM 5.3 Flash，推理开到最大” | Save `opencode-go / glm-5.3-flash / max` as this machine's default |
 | “这次用官方 DeepSeek Flash，推理最高” | Override the current task's new workers with `deepseek / deepseek-flash / max`; keep the machine default |
 | “当前默认用什么模型？” | Read and report the stored/effective default |
@@ -20,6 +22,8 @@ Use normal language with Codex; it translates the request into the plugin's type
 For the OpenCode lane, “以后 / 全局 / 设为默认 / 所有新执行者” expresses a persistent plugin-worker default, while “这次 / 当前任务” expresses a task override. A standalone external model/effort request without a scope is a machine-default request. That default covers only this plugin's future OpenCode workers; it does not change the Codex controller or native Luna.
 
 The plugin cannot persist a Codex-native model default. A Luna request applies to the requested task or an explicitly established preference within the current Codex thread. Do not store Luna through `ds_model_defaults` or claim it will carry into future Codex tasks.
+
+“所有工蜂 / 全部 worker” is a fleet-scoped model instruction, not a new provider type. Apply it to every delegate created after the instruction within the stated task/thread scope. Existing native subagents and OpenCode workers retain their saved models, so replace rather than mutate them when necessary. A fleet-scoped model instruction overrides the automatic lane recommendation. It does not manufacture cross-lane capabilities: native Luna has no plugin-managed persistent session, isolated worktree, queued correction mailbox, fork, or persisted `task_spec`. If a request requires those capabilities and also mandates Luna for all workers, surface the incompatibility and preserve the explicit Luna choice instead of silently substituting DeepSeek/GLM.
 
 ## Codex-native Luna lane
 
