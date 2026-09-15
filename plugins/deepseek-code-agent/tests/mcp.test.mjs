@@ -58,11 +58,11 @@ after(() => {
   void fs.rm(stateRoot, { recursive: true, force: true });
 });
 
-test("MCP initializes and lists tools", async () => {
+test("MCP initializes and keeps native Luna outside the external provider schema", async () => {
   const result = await request("tools/list");
   assert.ok(result.tools.length >= 10);
   assert.ok(result.tools.some((tool) => tool.name === "ds_spawn_agent"));
-  for (const name of ["ds_check", "ds_spawn_agent"]) {
+  for (const name of ["ds_check", "ds_spawn_agent", "ds_model_defaults"]) {
     const schema = result.tools.find((tool) => tool.name === name).inputSchema;
     assert.deepEqual(schema.properties.provider.enum, ["opencode-go", "deepseek"]);
     assert.deepEqual(schema.properties.variant.type, ["string", "null"]);

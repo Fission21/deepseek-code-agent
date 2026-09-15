@@ -1,6 +1,6 @@
 # Task Routing Pilot — 2026-09-15
 
-A transparent single-pair pilot of the task routing policy. It records one direct Codex execution and one delegated DeepSeek worker execution for each of a small, medium and large task, all from the same baseline commit `90d84be225fe2751ed0583917e7391ff29245559`. The machine-readable source is [task-routing-pilot-2026-09-15.json](./task-routing-pilot-2026-09-15.json); this page summarizes it and adds no new measurements.
+A transparent single-pair pilot of the task routing policy. It records one direct Codex execution and one delegated DeepSeek worker execution for each of a small, medium and large task, all from the same baseline commit `90d84be225fe2751ed0583917e7391ff29245559`. It did not test the later-added Codex-native GPT-5.6 Luna lane. The machine-readable source is [task-routing-pilot-2026-09-15.json](./task-routing-pilot-2026-09-15.json); this page summarizes it and adds no new measurements.
 
 This is not a formal benchmark. There is exactly one execution per cell, both arms ran in parallel, and the order was not alternated. The queen protocol asks for at least three alternated repetitions per variant, so this pilot does not satisfy it. Do not generalize these numbers, promise a fixed saving, or merge them with the [2026-09-14 combined-token report](./token-routing-benchmark-2026-09-14.md). Combined tokens and latency can still increase.
 
@@ -40,7 +40,7 @@ Worker total = input + cache_read + output + reasoning. Medium and large are mar
 
 From launching the six executions through accepting both arms, the controller increment was: input 6358712, cached input 6287488, output 18933, reasoning 6389, total 6377645, non-cached input 71224, proxy 90157.
 
-This interval covers the whole two-arm experiment, including managing the native control arm and reviewing both arms. It is not a pure delegation bill and must not be presented as one.
+This interval covers the whole two-arm experiment, including managing the direct Codex control arm and reviewing both arms. It is not a pure delegation bill and must not be presented as one.
 
 ### Wall time and independent acceptance
 
@@ -81,3 +81,4 @@ All six executions were accepted. The three direct executions each needed 0 corr
 - Cache-inclusive worker total exceeded direct total, so combined tokens and latency may increase even when the worker proxy looks lower.
 - Both arms ran in parallel, so each wall time can include contention for the same machine and provider capacity; the durations are single observations, not a stable performance baseline, and they feed no token reduction calculation.
 - This pilot is independent of the earlier combined-token benchmark, and the two must not be mixed.
+- The delegated arm used DeepSeek through the plugin. These measurements provide no evidence about native Luna cost, quality, latency or token savings.

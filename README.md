@@ -2,9 +2,9 @@
 
 English | [简体中文](./README.zh-CN.md)
 
-Delegate bounded coding work to DeepSeek or GLM through OpenCode Go, or directly to the official DeepSeek API through the OpenCode runtime. Codex remains the controller, reviewer, and final authority.
+Delegate bounded coding work either to Codex-native GPT-5.6 Luna or to DeepSeek/GLM through OpenCode. Codex remains the controller, reviewer, and final authority.
 
-The plugin adds persistent worker sessions, mailbox-style corrections, status waiting, context forks, permission handling, isolated Git worktrees, diff inspection, and scoped repository-instruction manifests. It is designed for coding goals where one worker implements and Codex reviews.
+The bundled Skill chooses among direct Codex work, a native Luna subagent, and the plugin's persistent OpenCode worker. The plugin adds mailbox-style corrections, status waiting, context forks, permission handling, isolated Git worktrees, diff inspection, and scoped repository-instruction manifests for the OpenCode lane.
 
 ## One-sentence installation with Codex
 
@@ -30,8 +30,10 @@ Start a new Codex task after installation so the MCP tools and Skill are loaded.
 - Local Codex desktop app or Codex CLI with plugin support
 - Git
 - Node.js 18 or newer
-- A current OpenCode version (validated with 1.18.30)
-- OpenCode Go access for Go models, or separate official DeepSeek API credentials
+- A current OpenCode version (validated with 1.18.30) for the DeepSeek/GLM lane
+- OpenCode Go access for Go models, or separate official DeepSeek API credentials, when using that lane
+
+The Codex-native Luna lane uses the host's `gpt-5.6-luna` subagent directly. It does not need OpenCode, `DEEPSEEK_API_KEY`, or another external provider credential. Availability depends on the current Codex host and account.
 
 The plugin stores no API keys. Authenticate OpenCode interactively on each computer:
 
@@ -48,9 +50,15 @@ opencode-go/deepseek-v4.1-flash
 
 Do not paste provider keys into Codex prompts, GitHub issues, logs, or repository files.
 
-## Select the model
+## Select the worker lane and model
 
-Without saved machine preferences, the built-in default remains `opencode-go/deepseek-v4.1-flash` with `max` reasoning. `ds_check` and `ds_spawn_agent` now accept:
+Use ordinary language in Codex. For example, “Use the Codex-native GPT-5.6 Luna subagent with medium reasoning for this bounded implementation” selects the native lane. It does not call `ds_check`, `ds_spawn_agent`, or OpenCode, and it is not a value accepted by the plugin's `provider` field. Luna reasoning can be requested as `none`, `low`, `medium`, `high`, `xhigh`, or `max`; if the host does not offer the requested combination, Codex reports that instead of silently switching lanes.
+
+The native Luna choice is scoped to the requested work. `ds_model_defaults` stores only OpenCode worker defaults and cannot persist a native Codex model preference. A native subagent uses the model selected when it is created; changing it means creating a new subagent.
+
+[OpenAI documents GPT-5.6 Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna) as a cost-sensitive, high-volume model. Published API prices do not establish how a Codex plan meters native subagent usage, so this project does not claim a fixed Luna saving without a matched Codex measurement.
+
+For the OpenCode worker lane, without saved machine preferences, the built-in default remains `opencode-go/deepseek-v4.1-flash` with `max` reasoning. `ds_check` and `ds_spawn_agent` accept:
 
 | Route | `provider` | `model` |
 |---|---|---|
@@ -59,7 +67,7 @@ Without saved machine preferences, the built-in default remains `opencode-go/dee
 | Official Flash | `deepseek` | `deepseek-flash` |
 | Official Pro | `deepseek` | `deepseek-v4-pro` |
 
-A standalone model/effort-setting request saves the machine default; use “this task only” for a temporary override. Use natural language: “Make OpenCode Go GLM 5.3 Flash with maximum reasoning my machine default,” “Use official DeepSeek Flash just for this task,” “Show my worker defaults,” or “Restore the plugin's original defaults.” Maximum/最高/拉满 map to `max`.
+A standalone OpenCode model/effort-setting request saves that lane's machine default; use “this task only” for a temporary override. Use natural language: “Make OpenCode Go GLM 5.3 Flash with maximum reasoning my machine default,” “Use official DeepSeek Flash just for this task,” “Show my OpenCode worker defaults,” or “Restore the plugin's original defaults.” Maximum/最高/拉满 map to `max`.
 
 Persistent defaults are saved through `ds_model_defaults`, apply to future workers across Codex tasks on this machine, and survive plugin reinstall. Task-specific choices override them without changing the saved preference. This setting controls plugin workers; the Codex controller model remains an app setting. The selected model persists across follow-ups, queues, restarts and forks. Changing model starts a new worker; errors never silently change providers.
 
@@ -138,25 +146,31 @@ Create a coding goal in Codex, or explicitly invoke the bundled Skill:
 Use $deepseek-coding-delegation to delegate this implementation and review the result.
 ```
 
-Codex selects the relevant repository instructions, passes bounded `scope_paths`, task-specific `required_reads`, and compact `critical_constraints`, then independently reviews the resulting diff and tests. Large rule documents can be limited to named sections instead of being copied into the prompt.
+To use the native low-cost lane without external credentials:
+
+```text
+Use Codex-native GPT-5.6 Luna with medium reasoning for the bounded implementation. Do not use OpenCode or external provider credentials; Codex must review and verify the result.
+```
+
+For native Luna, Codex sends a bounded task and the necessary repository context through native delegation. For the OpenCode lane, Codex passes explicit `scope_paths`, task-specific `required_reads`, and compact `critical_constraints`. In both cases Codex independently reviews the resulting diff and tests.
 
 ## Queen token efficiency
 
 ### Route by task complexity
 
-Choose the route from reasoning, risk, and exploration/verification burden, not line or file counts. **Small** known edits that take a few minutes stay with Codex. **Medium** mechanical work with clear acceptance criteria prefers one persistent worker. **Large or high-risk** work — state machines, concurrency, permissions, transactions, migrations — may still delegate the labor, but Codex must first fix the design, interfaces, invariants, failure semantics and acceptance cases, then review the actual diff and run independent verification; a worker's self-report or passing self-tests are never acceptance. An explicit user request to delegate or to stay direct overrides these defaults.
+Choose the route from reasoning, risk, and exploration/verification burden, not line or file counts. **Small** known edits that take a few minutes stay with Codex. **Medium** mechanical work with clear acceptance criteria prefers delegation: use Codex-native `gpt-5.6-luna` for a bounded, low-risk native subtask when available, or the persistent OpenCode worker when the user selects DeepSeek/GLM or the task benefits from its worktree, correction, and verification lifecycle. **Large or high-risk** work — state machines, concurrency, permissions, transactions, migrations — may delegate only bounded labor to either lane; Codex must first fix the design, interfaces, invariants, failure semantics and acceptance cases, then review the actual diff and run independent verification. A worker's self-report or passing self-tests are never acceptance. An explicit user model or lane choice overrides these defaults, and failures never authorize a silent cross-lane fallback.
 
-A 2026-09-15 pilot paired one direct and one delegated execution per size from the same commit: [task routing pilot](./docs/task-routing-pilot-2026-09-15.md). It ran one execution per cell in parallel without alternating order, so it is not the repeated benchmark the queen protocol asks for, and its numbers neither generalize nor promise a fixed saving. In that pilot, delegated worker non-cached input plus output was 13.78% below the three direct runs, while the controller's own interval was 55.41% below the direct proxy total; the controller interval also covers managing the native control arm and reviewing both runs, so it is not a pure delegation bill. Worker totals including cached reads were higher than direct totals, so combined tokens and latency can still increase; medium and large worker usage is marked incomplete.
+A 2026-09-15 pilot paired one direct and one delegated DeepSeek execution per size from the same commit: [task routing pilot](./docs/task-routing-pilot-2026-09-15.md). It did not test Luna. It ran one execution per cell in parallel without alternating order, so it is not the repeated benchmark the queen protocol asks for, and its numbers neither generalize nor promise a fixed saving. In that pilot, delegated worker non-cached input plus output was 13.78% below the three direct runs, while the controller's own interval was 55.41% below the direct proxy total; the controller interval also covers managing the direct Codex control arm and reviewing both runs, so it is not a pure delegation bill. Worker totals including cached reads were higher than direct totals, so combined tokens and latency can still increase; medium and large worker usage is marked incomplete.
 
-### Design, implement, verify, review
+### Design, delegate, verify, review
 
-Codex reads the critical call chain and decides interfaces, invariants and acceptance cases before delegation. An optional `task_spec` gives the worker those decisions and the exact check commands. The worker completes implementation, self-tests and routine repairs in one session. Codex reviews the patch and batches feedback; after two unsuccessful correction rounds it can take over after confirming the worker and verification have stopped.
+Codex reads the critical call chain and decides interfaces, invariants and acceptance cases before delegation. A native Luna subagent receives one bounded task through Codex's native delegation path. An OpenCode worker can additionally receive a persisted `task_spec`, worktree and exact check commands. In both lanes Codex reviews the actual patch and independently verifies acceptance; the OpenCode correction lifecycle remains unchanged.
 
 `ds_verify_agent` runs only the persisted checks while the worker is idle, retaining exit codes and full logs. Verification is bound to the current source, Git index, task specification and instruction identity; edits invalidate earlier evidence. Repeated calls observe the same asynchronous job; `rerun=true` explicitly requests another execution. `ds_wait_agent(return_on="actionable")` absorbs transient retries and escalates a continuous 120-second retry streak. The 55-second wait and 65-second host timeout remain. Existing calls without the new options keep their prior behavior.
 
 See the [task and evidence contract](plugins/deepseek-code-agent/skills/deepseek-coding-delegation/references/control-contract.md). This update has local functional tests; no new model comparison was run, so token savings and latency improvements remain unmeasured.
 
-The default workflow reserves **queen (Codex) judgment** for intent, consequential design choices, uncertain diagnoses, risk-focused review and acceptance. The worker handles high-volume discovery, editing, tests, routine fixes, documentation and evidence preparation within scope. Queen token savings should come from offloading labor while preserving quality. Delegate a coherent unit of work and reuse its session for corrections. Tiny known edits can still cost less to do directly.
+The default workflow reserves **queen (Codex) judgment** for intent, consequential design choices, uncertain diagnoses, risk-focused review and acceptance. Luna or the OpenCode worker handles high-volume discovery, editing, tests, routine fixes, documentation and evidence preparation within scope. Queen token savings should come from offloading labor while preserving quality. Delegate a coherent unit of work; reuse persistent OpenCode sessions for corrections, while native Luna gets a new subagent when its model selection changes. Tiny known edits can still cost less to do directly.
 
 `ds_wait_agent` and `ds_inspect_agent` default to compact responses: status, attention requests, cumulative worker usage and a bounded final handoff. Task echoes, intermediate tool logs and repeated instruction manifests stay out of the queen's normal context. Use `detail="full"` for diagnosis or omitted evidence and `include_diff=true` when the diff is needed. Save the spawn manifest once and reuse returned cursors.
 
@@ -167,7 +181,8 @@ The [earlier 27-result synthetic benchmark](./docs/token-routing-benchmark-2026-
 ## Safety model
 
 - Codex owns scope, authorization, business decisions, review, verification, and goal completion.
-- The worker must not commit, push, merge, deploy, alter production data, expose credentials, or discard unrelated changes.
+- Neither a native Luna subagent nor an OpenCode worker may commit, push, merge, deploy, alter production data, expose credentials, or discard unrelated changes without the user's authorization.
+- Native Luna uses Codex's built-in delegation path and must not receive OpenCode provider fields or external credentials. A lane failure never permits silent fallback to another model or provider.
 - Isolated worktrees start from committed `HEAD`; they do not include uncommitted files.
 - Instruction manifests identify the exact paths, hashes, and read scopes selected for the worker. They do not prove semantic compliance, so Codex must still review the patch.
 - The local OpenCode server binds to `127.0.0.1` and uses a random per-process password.
