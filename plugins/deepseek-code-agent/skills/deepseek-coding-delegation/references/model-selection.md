@@ -1,6 +1,6 @@
-# Worker models and authentication
+# Worker lanes, models and authentication
 
-Read this when selecting a model, configuring authentication or diagnosing a missing model. The `ds_*` names and plugin ID remain unchanged for compatibility.
+Read this when selecting the Codex-native Luna lane or an OpenCode model, configuring external authentication, or diagnosing a missing model. The `ds_*` names and plugin ID remain unchanged for compatibility.
 
 ## Natural-language requests and scope
 
@@ -8,16 +8,26 @@ Use normal language with Codex; it translates the request into the plugin's type
 
 | Request | Meaning |
 |---|---|
+| “这段实现用 Codex 原生 GPT-5.6 Luna，推理开到 medium” | Create a task-scoped native `gpt-5.6-luna` subagent; do not use `ds_*`, OpenCode or external credentials |
+| “不要用外部 Provider，这次改用原生 Luna，推理拉满” | Create a task-scoped native `gpt-5.6-luna / max` subagent; fail explicitly if unavailable |
 | “使用 OpenCode Go 的 GLM 5.3 Flash，推理开到最大” | Save `opencode-go / glm-5.3-flash / max` as this machine's default |
 | “这次用官方 DeepSeek Flash，推理最高” | Override the current task's new workers with `deepseek / deepseek-flash / max`; keep the machine default |
 | “当前默认用什么模型？” | Read and report the stored/effective default |
 | “恢复插件原来的默认模型” | Reset the machine default to Go DeepSeek Flash/max |
 
-“最大 / 最高 / 拉满 / max” maps to `max`; “高 / high” to `high`; “低 / low” to `low`; “默认档位 / 自动” to `null`. Distinguish a maximum request from `high`. Map provider/model aliases to exact catalog IDs and validate them. If a requested variant is unsupported, report available variants rather than silently lowering it.
+“最大 / 最高 / 拉满 / max” maps to `max`; “高 / high” to `high`; “中 / medium” to `medium`; “低 / low” to `low`; “默认档位 / 自动” removes an explicit override. Distinguish a maximum request from `high`. Validate the selected lane's actual model and effort support. If unavailable, report it rather than silently changing effort, model or lane.
 
-“以后 / 全局 / 设为默认 / 所有新执行者” expresses a persistent default. “这次 / 当前任务” expresses a task override. Preserve any established user scope. By the chosen interaction convention, a standalone model/effort-setting request without a scope is a machine-default request; a model choice attached to a specific coding task is task-local unless the user says otherwise. The global setting covers this plugin's new workers on this machine, including future Codex tasks. It does not change the Codex controller model or rewrite existing workers.
+For the OpenCode lane, “以后 / 全局 / 设为默认 / 所有新执行者” expresses a persistent plugin-worker default, while “这次 / 当前任务” expresses a task override. A standalone external model/effort request without a scope is a machine-default request. That default covers only this plugin's future OpenCode workers; it does not change the Codex controller or native Luna.
 
-## Persistent defaults
+The plugin cannot persist a Codex-native model default. A Luna request applies to the requested task or an explicitly established preference within the current Codex thread. Do not store Luna through `ds_model_defaults` or claim it will carry into future Codex tasks.
+
+## Codex-native Luna lane
+
+`gpt-5.6-luna` is a Codex-native subagent model, not an OpenCode catalog model or a third plugin provider. Select it through Codex's native subagent capability and pass the requested reasoning effort there. Do not call `ds_check`, `ds_spawn_agent`, or `ds_model_defaults`; do not start OpenCode; and do not read or forward `DEEPSEEK_API_KEY` or other external credentials.
+
+The current host determines whether Luna and the requested effort are available. When unavailable, explain the limitation and keep the user's lane choice intact instead of falling back silently. A native subagent retains the model chosen when it was created; create a new subagent to change models. Codex still owns task design, authorization, diff review, independent verification and acceptance.
+
+## OpenCode worker persistent defaults
 
 Use `ds_model_defaults` with `action="get"`, `"set"` or `"reset"`. On `set`, pass the intended provider/model/variant and optional workspace for catalog validation. Report the resolved selection and scope after saving. `get` reports the effective selection, whether it is saved, and the local settings path. `reset` restores the built-in selection even if the saved file is invalid.
 
@@ -35,7 +45,7 @@ node scripts/model-defaults.mjs reset
 
 Prefer natural language for ordinary use; these commands are useful for scripts, troubleshooting or verifying the saved values.
 
-## Selection
+## OpenCode worker selection
 
 Both `ds_check` and `ds_spawn_agent` accept `provider`, `model` and `variant`. `model` is the bare API model ID, without a provider prefix. `ds_check` also accepts `workspace` to read the same project configuration as the planned worker.
 
@@ -86,6 +96,7 @@ If the provider is disconnected, connect the chosen account. If a model is missi
 
 ## Sources
 
+- [OpenAI GPT-5.6 Luna model](https://developers.openai.com/api/docs/models/gpt-5.6-luna)
 - [OpenCode Go models and IDs](https://opencode.ai/docs/go/)
 - [OpenCode provider authentication](https://opencode.ai/docs/providers/#deepseek)
 - [OpenCode model configuration and variants](https://opencode.ai/docs/models/)

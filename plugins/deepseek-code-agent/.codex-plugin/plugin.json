@@ -1,7 +1,7 @@
 {
   "name": "deepseek-code-agent",
   "version": "0.1.0+codex.20260915081857",
-  "description": "Delegate coding to persistent DeepSeek or GLM workers through OpenCode Go or the official DeepSeek API, with Codex review.",
+  "description": "Route coding to Codex-native Luna or persistent DeepSeek/GLM workers, with Codex review.",
   "author": {
     "name": "Fission21",
     "url": "https://github.com/Fission21"
@@ -15,13 +15,14 @@
     "opencode",
     "coding-agent",
     "multi-agent",
-    "glm"
+    "glm",
+    "luna"
   ],
   "skills": "./skills/",
   "interface": {
     "displayName": "DeepSeek Code Agent",
-    "shortDescription": "Delegate coding to DeepSeek or GLM with Codex review.",
-    "longDescription": "Adds configurable DeepSeek and GLM coding workers through OpenCode Go or the official DeepSeek API, with natural-language model selection, persistent machine defaults, scoped instruction manifests, queued follow-ups, forks, permissions, diffs and Codex review guidance.",
+    "shortDescription": "Route work to native Luna or DeepSeek/GLM with Codex review.",
+    "longDescription": "Routes bounded work to a Codex-native GPT-5.6 Luna subagent or configurable persistent DeepSeek/GLM workers through OpenCode, with natural-language selection, scoped instructions, corrections, diffs and Codex-owned review and verification.",
     "developerName": "Fission21",
     "category": "Developer Tools",
     "websiteURL": "https://github.com/Fission21/deepseek-code-agent",
@@ -31,9 +32,10 @@
       "Interactive"
     ],
     "defaultPrompt": [
+      "Use Codex-native GPT-5.6 Luna with medium reasoning for this bounded implementation; do not use OpenCode or external credentials.",
       "Use DeepSeek or GLM to implement this coding goal, then review and verify its patch.",
       "Set OpenCode Go GLM 5.3 Flash with maximum reasoning as my machine default for new coding workers.",
-      "Show the current default worker model and inspect the active coding agent."
+      "Show the current OpenCode worker default and inspect the active coding agent."
     ]
   },
   "mcpServers": "./.mcp.json"

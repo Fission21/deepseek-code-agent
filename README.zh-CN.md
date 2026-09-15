@@ -2,9 +2,9 @@
 
 [English](./README.md) | 简体中文
 
-支持通过 OpenCode Go 使用 DeepSeek、GLM，也支持通过 OpenCode 执行器直连 DeepSeek 官方 API。把范围明确的编码实现交给执行者，由 Codex 保持主控、审核和最终决定权。
+支持把范围明确的编码工作交给 Codex 原生 GPT-5.6 Luna 子 Agent，也支持通过 OpenCode Go 使用 DeepSeek、GLM，或通过 OpenCode 执行器直连 DeepSeek 官方 API。Codex 始终保持主控、审核和最终决定权。
 
-插件提供持久执行者会话、信箱式纠正、状态等待、上下文 fork、权限请求处理、隔离 Git worktree、diff 检查和定向仓库规则清单。它适用于“一个执行者编码、Codex 最终把关”的编码目标。
+随插件提供的 Skill 会在 Codex 直接处理、原生 Luna 子 Agent 和插件的持久 OpenCode Worker 之间选择。插件为 OpenCode 通道提供持久会话、信箱式纠正、状态等待、上下文 fork、权限请求处理、隔离 Git worktree、diff 检查和定向仓库规则清单。
 
 ## 在 Codex 中一句话安装
 
@@ -30,8 +30,10 @@ codex plugin add deepseek-code-agent@deepseek-code-agent
 - 支持插件的本地 Codex 桌面应用或 Codex CLI
 - Git
 - Node.js 18 或更高版本
-- 当前版本的 OpenCode（已用 1.18.30 验证）
-- Go 模型需要 OpenCode Go 权限；官方模型需要单独的 DeepSeek API 凭据
+- DeepSeek/GLM 通道需要当前版本的 OpenCode（已用 1.18.30 验证）
+- 使用该通道时，Go 模型需要 OpenCode Go 权限；官方模型需要单独的 DeepSeek API 凭据
+
+Codex 原生 Luna 通道直接使用宿主提供的 `gpt-5.6-luna` 子 Agent，不需要 OpenCode、`DEEPSEEK_API_KEY` 或其他外部 Provider 凭据。是否可用以当前 Codex 宿主和账号为准。
 
 插件不保存 API Key。每台电脑都要在本机交互式认证：
 
@@ -48,9 +50,15 @@ opencode-go/deepseek-v4.1-flash
 
 不要把 Provider Key 粘贴到 Codex 提示词、GitHub Issue、日志或仓库文件中。
 
-## 选择模型
+## 选择执行通道和模型
 
-未保存本机偏好时，内置默认是 `opencode-go/deepseek-v4.1-flash`，推理档位 `max`。`ds_check` 和 `ds_spawn_agent` 现在都可以传入：
+日常可以直接在 Codex 里口述。例如：“这段范围明确的实现使用 Codex 原生 GPT-5.6 Luna 子 Agent，推理开到 medium。”这会选择原生通道，不调用 `ds_check`、`ds_spawn_agent` 或 OpenCode，也不能把 Luna 填进插件的 `provider` 字段。Luna 可请求 `none`、`low`、`medium`、`high`、`xhigh` 或 `max`；如果当前宿主不支持所选组合，Codex 应明确报告，不能静默换通道。
+
+Luna 选择只作用于本次要求的工作。`ds_model_defaults` 只保存 OpenCode Worker 默认值，不能持久化 Codex 原生模型偏好。原生子 Agent 创建后固定使用当时选择的模型；换模型要新建子 Agent。
+
+[OpenAI 官方将 GPT-5.6 Luna 定位为面向成本敏感、高吞吐工作负载的模型](https://developers.openai.com/api/docs/models/gpt-5.6-luna)。公开 API 价格不能直接证明 Codex 套餐如何计算原生子 Agent 用量，因此本项目不会在缺少同条件 Codex 实测时承诺固定节省比例。
+
+对于 OpenCode Worker 通道，未保存本机偏好时，内置默认是 `opencode-go/deepseek-v4.1-flash`，推理档位 `max`。`ds_check` 和 `ds_spawn_agent` 可以传入：
 
 | 通道 | `provider` | `model` |
 |---|---|---|
@@ -59,14 +67,14 @@ opencode-go/deepseek-v4.1-flash
 | 官方 Flash | `deepseek` | `deepseek-flash` |
 | 官方 Pro | `deepseek` | `deepseek-v4-pro` |
 
-日常建议直接口述。单独提出模型和推理档位设置时，默认保存到本机全局；如果是临时使用，加上“这次”或“仅当前任务”：
+OpenCode 模型同样可以直接口述。单独提出该通道的模型和推理档位设置时，默认保存到本机全局；如果是临时使用，加上“这次”或“仅当前任务”：
 
 - “以后都用 OpenCode Go 的 GLM 5.3 Flash，推理开到最大”——保存本机全局默认，之后新建的执行者和未来 Codex 任务都继承。
 - “这次走 DeepSeek 官方 API，用 Flash，推理最高”——只覆盖当前任务的新执行者。
 - “当前默认用什么模型？”——查询实际保存的配置。
 - “恢复插件原来的默认模型”——清除本机偏好，恢复内置默认。
 
-“最大 / 最高 / 拉满”都会映射到 `max`。口述由技能转换成明确的 provider、模型和档位，再通过 `ds_model_defaults` 保存到本机；偏好不写进插件包，重装后仍保留。全局指本插件的新执行者，Codex 主控模型仍由应用设置决定。
+“最大 / 最高 / 拉满”都会映射到 `max`。OpenCode 口述由技能转换成明确的 provider、模型和档位，再通过 `ds_model_defaults` 保存到本机；偏好不写进插件包，重装后仍保留。全局只指本插件的新 OpenCode Worker，Codex 主控模型和原生 Luna 子 Agent 不受它影响。
 
 选定的模型会随会话保存，追加消息、队列、重启和 fork 都保持该选择。更换模型需要新建执行者；出错时不会自动换通道。
 
@@ -145,25 +153,31 @@ npm --prefix plugins/deepseek-code-agent run test:live
 使用 $deepseek-coding-delegation 委派实现，并由 Codex 审核结果。
 ```
 
-Codex 会选择相关仓库规则，传入明确的 `scope_paths`、任务相关 `required_reads` 和精简的 `critical_constraints`，然后独立审核 diff 与测试。较大的规则文档可以只指定相关章节，不需要整份复制进提示词。
+如需完全使用 Codex 原生低成本通道，可以直接说：
+
+```text
+这段范围明确的实现用 Codex 原生 GPT-5.6 Luna，推理开到 medium。不要使用 OpenCode 或外部 Provider 凭据，结果由 Codex 审核并独立验证。
+```
+
+使用原生 Luna 时，Codex 通过内置委派传入边界明确的任务和必要仓库上下文；使用 OpenCode 通道时，Codex 传入明确的 `scope_paths`、任务相关 `required_reads` 和精简的 `critical_constraints`。两种通道都由 Codex 独立审核 diff 与测试。
 
 ## Queen Token 优化
 
 ### 按任务复杂度路由
 
-路由依据判断量、风险以及探索与验证负担，而不是行数或文件数。**小型**已知改动几分钟可完成，由 Codex 直接处理；**中型**机械实现且验收标准清晰，优先交给一个持久执行者；**大型或高风险**任务（状态机、并发、权限、事务、迁移等）可以把实现交给执行者，但 Codex 必须先确定设计、接口、不变量、失败语义和验收案例，再审查实际 diff 并独立验证，绝不按 worker 自报或自测通过来接受。用户明确要求委派或直接处理时，以用户要求为准。
+路由依据判断量、风险以及探索与验证负担，而不是行数或文件数。**小型**已知改动几分钟可完成，由 Codex 直接处理；**中型**机械实现且验收标准清晰时优先委派：范围明确、风险较低的原生子任务可优先使用 `gpt-5.6-luna`，用户指定 DeepSeek/GLM 或任务需要持久会话、worktree、纠错与验证生命周期时使用 OpenCode Worker。**大型或高风险**任务（状态机、并发、权限、事务、迁移等）只能把边界明确的劳动交给任一通道，Codex 必须先确定设计、接口、不变量、失败语义和验收案例，再审查实际 diff 并独立验证。绝不按 Worker 自报或自测通过来接受；用户明确选择优先，任何失败都不能触发静默跨通道降级。
 
-2026-09-15 的 pilot 在同一基线 commit 上为每个规模各做了一次 direct 与委派执行：[任务分级 pilot](./docs/task-routing-pilot-2026-09-15.md)。每格仅一次、双臂并行、顺序未交替，因此它不是 queen 协议要求的三次重复正式基准，结果不能推广，也不承诺固定节省。该 pilot 中，worker 非缓存输入加输出合计比三次 direct 低 13.78%，controller 自身区间的 proxy 比 direct proxy 合计低 55.41%；controller 区间也包含原生对照管理和两边审查，不能当作纯委派账单。计入缓存后 worker total 高于 direct total，总 Token 和耗时仍可能增加；medium 和 large 的 worker 用量标记为不完整。
+2026-09-15 的 pilot 在同一基线 commit 上为每个规模各做了一次 Codex 直接执行与委派 DeepSeek 执行：[任务分级 pilot](./docs/task-routing-pilot-2026-09-15.md)。它没有测试 Luna。每格仅一次、双臂并行、顺序未交替，因此它不是 queen 协议要求的三次重复正式基准，结果不能推广，也不承诺固定节省。该 pilot 中，worker 非缓存输入加输出合计比三次 direct 低 13.78%，controller 自身区间的 proxy 比 direct proxy 合计低 55.41%；controller 区间也包含管理 Codex 直接执行对照组和审查两组结果，不能当作纯委派账单。计入缓存后 worker total 高于 direct total，总 Token 和耗时仍可能增加；medium 和 large 的 worker 用量标记为不完整。
 
-### Codex 设计与审核，GLM 实现
+### Codex 设计与审核，Luna 或 OpenCode Worker 实现
 
-Codex 先阅读关键调用链，明确接口、必须保持的行为和验收案例，通过可选 `task_spec` 一次交付设计决定和检查命令。执行模型在同一会话中完成实现、自测和常规修复，Codex 集中审核并批量反馈；两轮修正仍未通过时，确认 worker 和验收进程停止后再接管。
+Codex 先阅读关键调用链，明确接口、必须保持的行为和验收案例。原生 Luna 子 Agent 通过 Codex 自身的委派通道接收一个边界明确的任务；OpenCode Worker 还可以接收持久化 `task_spec`、worktree 和精确检查命令。两条通道都必须由 Codex 审查实际补丁并独立验收；OpenCode 原有纠错生命周期保持不变。
 
 新增 `ds_verify_agent`：只在 worker 空闲时运行预先保存的检查，保留退出码和完整日志，并将结果绑定到源码、Git 暂存区、任务规范和指令身份。代码变化会使旧证据失效；重复查询只读取同一异步任务，显式设置 `rerun=true` 才重新执行。`ds_wait_agent(return_on="actionable")` 在程序内处理短暂重试，连续重试 120 秒后升级为需处理事件。55 秒等待和 65 秒宿主超时保持不变，旧调用兼容。
 
 详见[任务与验收契约](plugins/deepseek-code-agent/skills/deepseek-coding-delegation/references/control-contract.md)。本次完成本地功能验证，未进行新的模型对比实测，因此尚不声称达到具体的 Token 节省比例或耗时目标。
 
-默认流程让 **queen（Codex）专注于最影响质量的判断**：理解需求、关键设计与取舍、疑难诊断、风险审查和最终验收。工蜂承担量大的代码探索、实现、测试、常规修复、文档和证据整理。省 queen Token 应该来自把这些工作交出去，同时保持质量。一次委派一个完整行为，纠错复用同一会话；已知的小改动仍可直接完成。
+默认流程让 **queen（Codex）专注于最影响质量的判断**：理解需求、关键设计与取舍、疑难诊断、风险审查和最终验收。Luna 或 OpenCode Worker 承担量大的代码探索、实现、测试、常规修复、文档和证据整理。省 queen Token 应该来自把这些工作交出去，同时保持质量。一次委派一个完整行为；OpenCode 纠错复用持久会话，原生 Luna 更换模型时新建子 Agent。已知的小改动仍可直接完成。
 
 `ds_wait_agent` 和 `ds_inspect_agent` 默认只返回精简状态、待处理请求、执行者累计用量和有长度上限的最终交付摘要。普通等待不再带回任务回声、工具过程日志或重复指令清单。需要诊断或补全证据时使用 `detail="full"`，需要 diff 时显式设置 `include_diff=true`。保存首次 spawn 的清单，并持续复用返回的 cursor。
 
@@ -174,7 +188,8 @@ Codex 先阅读关键调用链，明确接口、必须保持的行为和验收�
 ## 安全边界
 
 - Codex 负责范围、授权、业务决定、审核、验证和目标完成状态。
-- 执行者不得自行提交、推送、合并、部署、修改生产数据、暴露凭据或丢弃无关改动。
+- 原生 Luna 子 Agent 和 OpenCode Worker 都不得在没有用户授权时自行提交、推送、合并、部署、修改生产数据、暴露凭据或丢弃无关改动。
+- Luna 使用 Codex 内置委派通道，不接收 OpenCode Provider 字段或外部凭据；任一通道失败都不能静默切换模型或 Provider。
 - 隔离 worktree 从已提交的 `HEAD` 创建，不包含未提交文件。
 - 指令清单记录执行者收到的准确路径、哈希和读取范围，但不能证明语义上完全服从，因此 Codex 仍须审核补丁。
 - 本地 OpenCode 服务只绑定 `127.0.0.1`，每次进程使用随机密码。
