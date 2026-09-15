@@ -52,7 +52,7 @@ opencode-go/deepseek-v4.1-flash
 
 ## 选择执行通道和模型
 
-日常可以直接在 Codex 里口述。例如：“这段范围明确的实现使用 Codex 原生 GPT-5.6 Luna 子 Agent，推理开到 medium。”这会选择原生通道，不调用 `ds_check`、`ds_spawn_agent` 或 OpenCode，也不能把 Luna 填进插件的 `provider` 字段。Luna 可请求 `none`、`low`、`medium`、`high`、`xhigh` 或 `max`；如果当前宿主不支持所选组合，Codex 应明确报告，不能静默换通道。
+日常可以直接在 Codex 里口述。例如：“这段范围明确的实现使用 Codex 原生 GPT-5.6 Luna 子 Agent。”这会选择原生通道；没有明确说推理档位时，Codex 应在 spawn 中传 `model="gpt-5.6-luna"` 和 `reasoning_effort="max"`。它不调用 `ds_check`、`ds_spawn_agent` 或 OpenCode，也不能把 Luna 填进插件的 `provider` 字段。Luna 可显式请求 `none`、`low`、`medium`、`high`、`xhigh` 或 `max`；如果明确要求“默认档位/自动”，才省略该字段。如果当前宿主不支持所选组合，Codex 应明确报告，不能静默换通道。
 
 Luna 选择只作用于本次要求的工作。`ds_model_defaults` 只保存 OpenCode Worker 默认值，不能持久化 Codex 原生模型偏好。原生子 Agent 创建后固定使用当时选择的模型；换模型要新建子 Agent。
 
@@ -78,7 +78,7 @@ OpenCode 模型同样可以直接口述。单独提出该通道的模型和推�
 
 选定的模型会随会话保存，追加消息、队列、重启和 fork 都保持该选择。更换模型需要新建执行者；出错时不会自动换通道。
 
-`variant` 可以省略：沿用本机默认模型时继承保存的档位；显式切换到不同模型时，原有 Go DeepSeek 模型默认 `max`，其他模型使用运行时默认档位。显式传 `null` 可让任意模型使用运行时默认值；传字符串时必须是本机模型目录支持的档位。这两个 provider 中已配置到 OpenCode 目录的其他模型 ID 也可使用。
+`variant` 可以省略：沿用本机默认模型时继承保存的档位；显式切换到不同 provider/model 且未指定档位时，所有外部模型都默认 `max`，包括 Go GLM、官方 Flash 和 Pro。同一模型的已保存档位优先，已保存的 `null` 也要保留；显式传 `null` 可让本次请求使用运行时默认值。传字符串时必须是本机模型目录支持的档位。这两个 provider 中已配置到 OpenCode 目录的其他模型 ID 也可使用。
 
 走官方 API 时，在 OpenCode 中使用 `/connect → DeepSeek`，也可以运行 `opencode auth login`。另一种方式是在启动 Codex 前给宿主进程设置 `DEEPSEEK_API_KEY`，插件会传给 OpenCode。官方内置 provider 通常请求 `https://api.deepseek.com`，使用独立的 DeepSeek API 账号；工具执行和多轮上下文仍由 OpenCode 管理。插件不会改写 endpoint 或保存密钥。
 
@@ -156,7 +156,7 @@ npm --prefix plugins/deepseek-code-agent run test:live
 如需完全使用 Codex 原生低成本通道，可以直接说：
 
 ```text
-这段范围明确的实现用 Codex 原生 GPT-5.6 Luna，推理开到 medium。不要使用 OpenCode 或外部 Provider 凭据，结果由 Codex 审核并独立验证。
+这段范围明确的实现用 Codex 原生 GPT-5.6 Luna，推理开到最大。不要使用 OpenCode 或外部 Provider 凭据，结果由 Codex 审核并独立验证。
 ```
 
 使用原生 Luna 时，Codex 通过内置委派传入边界明确的任务和必要仓库上下文；使用 OpenCode 通道时，Codex 传入明确的 `scope_paths`、任务相关 `required_reads` 和精简的 `critical_constraints`。两种通道都由 Codex 独立审核 diff 与测试。

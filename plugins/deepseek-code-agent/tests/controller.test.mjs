@@ -663,7 +663,7 @@ function routingCatalog() {
       { id: "deepseek", models: {
         "deepseek-flash": { variants: { low: {}, high: {}, max: {} } },
         "deepseek-v4-pro": { variants: { high: {}, max: {} } },
-        "future-official-model": {},
+        "future-official-model": { variants: { max: {} } },
       } },
     ],
   };
@@ -690,11 +690,27 @@ async function routingController(t, catalog = routingCatalog()) {
   return { controller, workspace, calls, request, options };
 }
 
-test("model defaults are paired with provider and max is not imposed on other models", () => {
+test("all omitted external variants default to max while explicit null stays runtime-default", () => {
   assert.deepEqual(resolveModelSelection(), {provider:"opencode-go", model:"deepseek-v4.1-flash", variant:"max"});
-  assert.deepEqual(resolveModelSelection({provider:"deepseek"}), {provider:"deepseek", model:"deepseek-flash", variant:null});
-  assert.equal(resolveModelSelection({model:"glm-5.3-flash"}).variant, null);
+  assert.deepEqual(resolveModelSelection({provider:"deepseek"}), {provider:"deepseek", model:"deepseek-flash", variant:"max"});
+  assert.equal(resolveModelSelection({model:"glm-5.3-flash"}).variant, "max");
+  assert.equal(resolveModelSelection({provider:"deepseek", model:"deepseek-v4-pro"}).variant, "max");
   assert.equal(resolveModelSelection({variant:null}).variant, null);
+  assert.equal(resolveEffectiveSelection({model:"glm-5.3-flash"}).variant, "max");
+  assert.equal(resolveEffectiveSelection({provider:"deepseek", model:"deepseek-flash"}).variant, "max");
+  assert.equal(resolveEffectiveSelection({provider:"deepseek", model:"deepseek-v4-pro"}).variant, "max");
+  assert.equal(
+    resolveEffectiveSelection({}, {provider:"opencode-go", model:"glm-5.3-flash", variant:"high"}).variant,
+    "high",
+  );
+  assert.equal(
+    resolveEffectiveSelection({}, {provider:"deepseek", model:"deepseek-flash", variant:null}).variant,
+    null,
+  );
+  assert.equal(
+    resolveEffectiveSelection({model:"glm-5.3-flash"}, {provider:"opencode-go", model:"deepseek-v4.1-flash", variant:"low"}).variant,
+    "max",
+  );
   assert.throws(() => resolveModelSelection({provider:"other"}), /provider must/);
   assert.throws(() => resolveModelSelection({model:"deepseek/deepseek-flash"}), /without a provider prefix/);
   assert.throws(() => resolveModelSelection({variant:""}), /variant must/);
@@ -945,9 +961,9 @@ test("partial overrides follow route inheritance rules against saved defaults", 
   assert.deepEqual(resolveEffectiveSelection({model:"deepseek-v4.1-flash"},saved),
     {provider:"opencode-go",model:"deepseek-v4.1-flash",variant:"max"});
   assert.deepEqual(resolveEffectiveSelection({provider:"deepseek"},saved),
-    {provider:"deepseek",model:"deepseek-flash",variant:null});
+    {provider:"deepseek",model:"deepseek-flash",variant:"max"});
   assert.deepEqual(resolveEffectiveSelection({provider:"deepseek",model:"deepseek-flash"},saved),
-    {provider:"deepseek",model:"deepseek-flash",variant:null});
+    {provider:"deepseek",model:"deepseek-flash",variant:"max"});
   assert.deepEqual(resolveEffectiveSelection({provider:"opencode-go",model:"glm-5.3-flash"},saved),
     {provider:"opencode-go",model:"glm-5.3-flash",variant:"high"});
   const noSaved = resolveEffectiveSelection({},null);
@@ -957,7 +973,7 @@ test("partial overrides follow route inheritance rules against saved defaults", 
   assert.deepEqual(resolveEffectiveSelection({variant:null},null),
     {provider:"opencode-go",model:"deepseek-v4.1-flash",variant:null});
   assert.deepEqual(resolveEffectiveSelection({model:"deepseek-flash"},null),
-    {provider:"opencode-go",model:"deepseek-flash",variant:null});
+    {provider:"opencode-go",model:"deepseek-flash",variant:"max"});
   assert.deepEqual(resolveEffectiveSelection({provider:"deepseek",variant:"high"},null),
     {provider:"deepseek",model:"deepseek-flash",variant:"high"});
   assert.throws(() => resolveEffectiveSelection({provider:"x"},null),/provider must/);

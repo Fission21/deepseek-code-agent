@@ -52,7 +52,7 @@ Do not paste provider keys into Codex prompts, GitHub issues, logs, or repositor
 
 ## Select the worker lane and model
 
-Use ordinary language in Codex. For example, “Use the Codex-native GPT-5.6 Luna subagent with medium reasoning for this bounded implementation” selects the native lane. It does not call `ds_check`, `ds_spawn_agent`, or OpenCode, and it is not a value accepted by the plugin's `provider` field. Luna reasoning can be requested as `none`, `low`, `medium`, `high`, `xhigh`, or `max`; if the host does not offer the requested combination, Codex reports that instead of silently switching lanes.
+Use ordinary language in Codex. For example, “Use the Codex-native GPT-5.6 Luna subagent for this bounded implementation” selects the native lane and, when no effort is stated, Codex must spawn it with `model="gpt-5.6-luna"` and `reasoning_effort="max"`. It does not call `ds_check`, `ds_spawn_agent`, or OpenCode, and it is not a value accepted by the plugin's `provider` field. Luna reasoning can be explicitly requested as `none`, `low`, `medium`, `high`, `xhigh`, or `max`; an explicit “default/automatic” request intentionally omits the effort field. If the host does not offer the requested combination, Codex reports that instead of silently switching lanes.
 
 The native Luna choice is scoped to the requested work. `ds_model_defaults` stores only OpenCode worker defaults and cannot persist a native Codex model preference. A native subagent uses the model selected when it is created; changing it means creating a new subagent.
 
@@ -71,7 +71,7 @@ A standalone OpenCode model/effort-setting request saves that lane's machine def
 
 Persistent defaults are saved through `ds_model_defaults`, apply to future workers across Codex tasks on this machine, and survive plugin reinstall. Task-specific choices override them without changing the saved preference. This setting controls plugin workers; the Codex controller model remains an app setting. The selected model persists across follow-ups, queues, restarts and forks. Changing model starts a new worker; errors never silently change providers.
 
-`variant` is optional. The saved model pair inherits its saved variant. When explicitly switching to another pair, only the original Go DeepSeek model defaults to `max`; other models use their runtime default. Explicit `null` uses the runtime default for any model. A string must be supported by that model's local catalog. Other model IDs configured in either provider's OpenCode catalog are also supported.
+`variant` is optional. The saved model pair inherits its saved variant. When explicitly switching to another provider/model pair without a variant, every external model defaults to `max`, including Go GLM and official Flash/Pro. An explicitly saved variant for the same pair still wins, including saved `null`; an explicit `variant=null` always uses the runtime default for that request. A string must be supported by that model's local catalog. Other model IDs configured in either provider's OpenCode catalog are also supported.
 
 For official API access, use OpenCode `/connect → DeepSeek` (or `opencode auth login`). Alternatively pass `DEEPSEEK_API_KEY` to the Codex host before launch; the plugin forwards it to OpenCode. The built-in official provider normally requests `https://api.deepseek.com` using your separate DeepSeek account. OpenCode still runs the coding tools and manages conversation history. The plugin does not rewrite provider endpoints or store keys.
 
@@ -149,7 +149,7 @@ Use $deepseek-coding-delegation to delegate this implementation and review the r
 To use the native low-cost lane without external credentials:
 
 ```text
-Use Codex-native GPT-5.6 Luna with medium reasoning for the bounded implementation. Do not use OpenCode or external provider credentials; Codex must review and verify the result.
+Use Codex-native GPT-5.6 Luna with maximum reasoning for the bounded implementation. Do not use OpenCode or external provider credentials; Codex must review and verify the result.
 ```
 
 For native Luna, Codex sends a bounded task and the necessary repository context through native delegation. For the OpenCode lane, Codex passes explicit `scope_paths`, task-specific `required_reads`, and compact `critical_constraints`. In both cases Codex independently reviews the resulting diff and tests.
