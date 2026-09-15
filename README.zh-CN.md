@@ -56,6 +56,8 @@ opencode-go/deepseek-v4.1-flash
 
 Luna 选择只作用于本次要求的工作。`ds_model_defaults` 只保存 OpenCode Worker 默认值，不能持久化 Codex 原生模型偏好。原生子 Agent 创建后固定使用当时选择的模型；换模型要新建子 Agent。
 
+也可以直接给一组工蜂统一指定模型。例如“当前任务所有工蜂都用 5.6 Luna”，表示从这条指令之后，本任务新建的每个工蜂都走 Codex 原生 Luna；“本次全部工蜂使用 Go GLM 5.3 Flash”则让本任务新建的 OpenCode Worker 统一使用该模型，但不改本机默认值。已经创建的工蜂保持原模型，需要换模型时应新建替代工蜂。“所有工蜂”默认只作用于当前任务或当前 Codex 会话；只有明确说“以后 / 全局 / 所有新执行者”才表示持久偏好，而且 Luna 仍不能通过 `ds_model_defaults` 持久化。
+
 [OpenAI 官方将 GPT-5.6 Luna 定位为面向成本敏感、高吞吐工作负载的模型](https://developers.openai.com/api/docs/models/gpt-5.6-luna)。公开 API 价格不能直接证明 Codex 套餐如何计算原生子 Agent 用量，因此本项目不会在缺少同条件 Codex 实测时承诺固定节省比例。
 
 对于 OpenCode Worker 通道，未保存本机偏好时，内置默认是 `opencode-go/deepseek-v4.1-flash`，推理档位 `max`。`ds_check` 和 `ds_spawn_agent` 可以传入：
@@ -165,7 +167,7 @@ npm --prefix plugins/deepseek-code-agent run test:live
 
 ### 按任务复杂度路由
 
-路由依据判断量、风险以及探索与验证负担，而不是行数或文件数。**小型**已知改动几分钟可完成，由 Codex 直接处理；**中型**机械实现且验收标准清晰时优先委派：范围明确、风险较低的原生子任务可优先使用 `gpt-5.6-luna`，用户指定 DeepSeek/GLM 或任务需要持久会话、worktree、纠错与验证生命周期时使用 OpenCode Worker。**大型或高风险**任务（状态机、并发、权限、事务、迁移等）只能把边界明确的劳动交给任一通道，Codex 必须先确定设计、接口、不变量、失败语义和验收案例，再审查实际 diff 并独立验证。绝不按 Worker 自报或自测通过来接受；用户明确选择优先，任何失败都不能触发静默跨通道降级。
+路由依据判断量、风险以及探索与验证负担，而不是行数或文件数。**小型**已知改动几分钟可完成，由 Codex 直接处理；**中型**机械实现且验收标准清晰时优先委派：范围明确、风险较低的原生子任务可优先使用 `gpt-5.6-luna`。任务确实需要持久会话、独立 worktree、纠错/追加消息队列、fork 或持久化验收时，优先使用 DeepSeek/GLM OpenCode Worker，因为 Luna 不提供这套插件生命周期。**大型或高风险**任务（状态机、并发、权限、事务、迁移等）只能把边界明确的劳动交给任一通道，Codex 必须先确定设计、接口、不变量、失败语义和验收案例，再审查实际 diff 并独立验证。绝不按 Worker 自报或自测通过来接受；用户对本次或全部工蜂的明确模型选择优先于自动路由，能力冲突必须如实说明，任何失败都不能触发静默跨通道降级。
 
 2026-09-15 的 pilot 在同一基线 commit 上为每个规模各做了一次 Codex 直接执行与委派 DeepSeek 执行：[任务分级 pilot](./docs/task-routing-pilot-2026-09-15.md)。它没有测试 Luna。每格仅一次、双臂并行、顺序未交替，因此它不是 queen 协议要求的三次重复正式基准，结果不能推广，也不承诺固定节省。该 pilot 中，worker 非缓存输入加输出合计比三次 direct 低 13.78%，controller 自身区间的 proxy 比 direct proxy 合计低 55.41%；controller 区间也包含管理 Codex 直接执行对照组和审查两组结果，不能当作纯委派账单。计入缓存后 worker total 高于 direct total，总 Token 和耗时仍可能增加；medium 和 large 的 worker 用量标记为不完整。
 
