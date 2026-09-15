@@ -46,7 +46,11 @@ The live test makes a small request to the selected model in a temporary Git rep
 
 ## Routing expectation
 
-Codex decides the design, interfaces, invariants and acceptance cases. A persistent worker implements that plan, self-tests and fixes routine failures. Codex reviews the scoped patch and gives one batch of feedback; after two unsuccessful review correction rounds it may take over, after confirming the worker and verification have stopped. Tiny edits can be handled directly.
+Route by judgment, risk, and exploration/verification burden, not line counts. Small known edits that take a few minutes stay with Codex. Medium mechanical work with clear acceptance criteria prefers one persistent worker. Large or high-risk work (state machines, concurrency, permissions, transactions, migrations) may delegate the labor, but Codex must first decide the design, interfaces, data flows, invariants, failure semantics and acceptance examples, then review the actual diff and run independent verification; worker self-reports and passing self-tests are never acceptance. An explicit user request overrides these defaults.
+
+Codex decides the design, interfaces, invariants and acceptance cases. A persistent worker implements that plan, self-tests and fixes routine failures. Codex reviews the scoped patch and gives one batch of feedback; after two unsuccessful review correction rounds it may take over, after confirming the worker and verification have stopped.
+
+The repository's 2026-09-15 [task routing pilot](../../docs/task-routing-pilot-2026-09-15.md) records one direct/delegated pair per size from one commit. It is a single non-repeated pilot, not a benchmark; its results do not generalize, and combined tokens and latency can still increase. The link targets the source repository layout; a standalone plugin package does not include the `docs/` directory.
 
 `ds_spawn_agent` accepts an optional structured `task_spec`. `ds_verify_agent` runs its preselected commands and preserves full logs, binding results to a source snapshot. Verification can run beyond one MCP wait window; repeated calls observe the same job rather than executing checks again. Inspect remains read-only. Neither worker completion nor passing checks means Codex has accepted the patch.
 

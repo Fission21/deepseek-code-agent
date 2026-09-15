@@ -1,6 +1,6 @@
 ---
 name: deepseek-coding-delegation
-description: Keep the queen (Codex) on quality-critical engineering decisions while a DeepSeek or GLM worker handles bounded discovery, implementation, tests, routine fixes and evidence preparation. Use for coding tasks, coding goals, supporting engineering work, and selecting, querying or resetting this plugin’s worker model defaults; handle tiny known edits directly.
+description: Keep the queen (Codex) on quality-critical engineering decisions while a DeepSeek or GLM worker handles bounded discovery, implementation, tests, routine fixes and evidence preparation. Use for coding tasks, coding goals, supporting engineering work, and selecting, querying or resetting this plugin’s worker model defaults; route small known edits directly, prefer delegation for clear medium work, and keep design, diff review and independent verification for large or high-risk work.
 ---
 
 # DeepSeek Coding Delegation
@@ -25,7 +25,12 @@ Use the queen where its judgment most affects quality: intent, acceptance criter
 
 ## Route and delegate
 
-- Handle a tiny, understood edit directly when describing it and reviewing it would take more work than doing it. Hand off a coherent behavior or investigation with acceptance criteria, rather than one function or tool command per turn.
+Choose the route from how much judgment, risk, and exploration/verification burden the task carries — not from line counts or file counts. This is a decision guide for Codex’s situational judgment, not an automatic classifier, and an explicit user request to delegate or to stay direct overrides it.
+
+- **Small (direct):** a known, clearly understood change that takes a few minutes and needs neither broad discovery nor risky design. Handle it in Codex directly; briefing and reviewing a worker would cost more than the edit. Report the route as direct.
+- **Medium (prefer delegation):** mechanical implementation, or a larger amount of testing, with clear and objective acceptance criteria. Prefer one persistent worker, carrying the design decisions and exact checks in `task_spec`.
+- **Large or high-risk (delegated labor, queen-owned design):** state machines, concurrency, permissions, transactions, migrations, or changes where a wrong invariant, interface or failure semantic is expensive. The labor may be delegated, but Codex must first decide the design, interface, data flow, invariants, failure semantics and acceptance examples; then Codex reviews the actual diff and runs independent verification. Never accept a worker’s self-report or passing self-tests as acceptance.
+- Hand off a coherent behavior or investigation with acceptance criteria, rather than one function or tool command per turn.
 - Prefer one persistent worker. Avoid additional queen-model workers for ordinary implementation. Reuse the worker for related corrections; use a fresh session for unrelated tasks.
 - Before spawning, read applicable repository instructions and the critical call chain. Codex must decide the interface, data flow, invariants, failure behavior and acceptance examples that determine correctness. Leave routine implementation and broader discovery to the worker. Do not substitute a vague task restatement for a design, or prewrite every implementation detail.
 - Send a `task_spec` with the design decisions, observable acceptance criteria and exact checks selected by Codex. Keep it grounded in existing contracts; do not add speculative constraints. For an unfamiliar subsystem, first request a bounded discovery report from the same worker, then resolve the consequential decisions before implementation.
