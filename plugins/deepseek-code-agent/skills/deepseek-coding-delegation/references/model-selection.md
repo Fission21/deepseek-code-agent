@@ -8,14 +8,14 @@ Use normal language with Codex; it translates the request into the plugin's type
 
 | Request | Meaning |
 |---|---|
-| “这段实现用 Codex 原生 GPT-5.6 Luna，推理开到 medium” | Create a task-scoped native `gpt-5.6-luna` subagent; do not use `ds_*`, OpenCode or external credentials |
+| “这段实现用 Codex 原生 GPT-5.6 Luna，推理开到 medium” | Create a task-scoped native `gpt-5.6-luna` subagent with `reasoning_effort="medium"`; do not use `ds_*`, OpenCode or external credentials |
 | “不要用外部 Provider，这次改用原生 Luna，推理拉满” | Create a task-scoped native `gpt-5.6-luna / max` subagent; fail explicitly if unavailable |
 | “使用 OpenCode Go 的 GLM 5.3 Flash，推理开到最大” | Save `opencode-go / glm-5.3-flash / max` as this machine's default |
 | “这次用官方 DeepSeek Flash，推理最高” | Override the current task's new workers with `deepseek / deepseek-flash / max`; keep the machine default |
 | “当前默认用什么模型？” | Read and report the stored/effective default |
 | “恢复插件原来的默认模型” | Reset the machine default to Go DeepSeek Flash/max |
 
-“最大 / 最高 / 拉满 / max” maps to `max`; “高 / high” to `high`; “中 / medium” to `medium`; “低 / low” to `low`; “默认档位 / 自动” removes an explicit override. Distinguish a maximum request from `high`. Validate the selected lane's actual model and effort support. If unavailable, report it rather than silently changing effort, model or lane.
+“最大 / 最高 / 拉满 / max” maps to `max`; “高 / high” to `high`; “中 / medium” to `medium`; “低 / low” to `low`; “默认档位 / 自动” removes an explicit override. When no effort is stated, native Luna must be spawned with `reasoning_effort="max"`, while an external provider/model selection must resolve an omitted `variant` to `max`. Distinguish a maximum request from `high`. Validate the selected lane's actual model and effort support. If unavailable, report it rather than silently changing effort, model or lane.
 
 For the OpenCode lane, “以后 / 全局 / 设为默认 / 所有新执行者” expresses a persistent plugin-worker default, while “这次 / 当前任务” expresses a task override. A standalone external model/effort request without a scope is a machine-default request. That default covers only this plugin's future OpenCode workers; it does not change the Codex controller or native Luna.
 
@@ -23,7 +23,7 @@ The plugin cannot persist a Codex-native model default. A Luna request applies t
 
 ## Codex-native Luna lane
 
-`gpt-5.6-luna` is a Codex-native subagent model, not an OpenCode catalog model or a third plugin provider. Select it through Codex's native subagent capability and pass the requested reasoning effort there. Do not call `ds_check`, `ds_spawn_agent`, or `ds_model_defaults`; do not start OpenCode; and do not read or forward `DEEPSEEK_API_KEY` or other external credentials.
+`gpt-5.6-luna` is a Codex-native subagent model, not an OpenCode catalog model or a third plugin provider. Select it through Codex's native subagent capability and pass `reasoning_effort="max"` when the user did not specify an effort. Pass an explicitly requested effort unchanged; if the user explicitly asks for the host's “default/automatic” effort, omit the field for that request. Do not call `ds_check`, `ds_spawn_agent`, or `ds_model_defaults`; do not start OpenCode; and do not read or forward `DEEPSEEK_API_KEY` or other external credentials.
 
 The current host determines whether Luna and the requested effort are available. When unavailable, explain the limitation and keep the user's lane choice intact instead of falling back silently. A native subagent retains the model chosen when it was created; create a new subagent to change models. Codex still owns task design, authorization, diff review, independent verification and acceptance.
 
@@ -33,7 +33,7 @@ Use `ds_model_defaults` with `action="get"`, `"set"` or `"reset"`. On `set`, pas
 
 The machine default is local state under the controller's state directory, separate from the plugin installation and provider credentials. It survives reinstalls and applies when subsequent checks/spawns omit model selection. No API keys are stored in it. Existing agents, queued messages and forks continue using their saved model selection.
 
-Precedence is: explicit worker/task selection → machine default → built-in default. A variant-only override applies to the default model. A model-only override keeps the default provider; an explicit provider without a model selects that provider's built-in Flash model. A different explicit model/provider gets that model's own default variant unless supplied; it does not accidentally inherit another model's reasoning setting. Explicit `variant=null` always removes the override. Invalid saved settings cause an actionable error; never pretend the built-in model was the user's saved choice.
+Precedence is: explicit worker/task selection → machine default → built-in default. A variant-only override applies to the default model. A model-only override keeps the default provider; an explicit provider without a model selects that provider's built-in Flash model. A different explicit model/provider defaults to `max` when its variant is omitted; it does not accidentally inherit another model's saved reasoning setting. An explicitly saved variant for the same provider/model pair still wins, including saved `null`. Explicit `variant=null` always removes the override. Invalid saved settings cause an actionable error; never pretend the built-in model was the user's saved choice.
 
 From the plugin directory:
 
@@ -52,11 +52,11 @@ Both `ds_check` and `ds_spawn_agent` accept `provider`, `model` and `variant`. `
 | Route | provider | model | Omitted variant |
 |---|---|---|---|
 | Go DeepSeek (built-in default) | `opencode-go` | `deepseek-v4.1-flash` | `max` |
-| Go GLM | `opencode-go` | `glm-5.3-flash` | Runtime default |
-| Official DeepSeek Flash | `deepseek` | `deepseek-flash` | Runtime default |
-| Official DeepSeek Pro | `deepseek` | `deepseek-v4-pro` | Runtime default |
+| Go GLM | `opencode-go` | `glm-5.3-flash` | `max` |
+| Official DeepSeek Flash | `deepseek` | `deepseek-flash` | `max` |
+| Official DeepSeek Pro | `deepseek` | `deepseek-v4-pro` | `max` |
 
-Without saved defaults, omitting `provider` selects Go and omitting `model` selects that provider's Flash model. Saved defaults take precedence for omitted selection fields as described above. Explicit `variant=null` omits the override for any model, including the old default. A string must appear in the local catalog's `available_variants`; unsupported variants fail before creating a session. The model list is not frozen: other IDs in either supported provider's configured OpenCode catalog can be selected.
+Without saved defaults, omitting `provider` selects Go and omitting `model` selects that provider's Flash model. Every omitted external `variant` resolves to `max`, including Go GLM and official Flash/Pro. Saved defaults take precedence for omitted selection fields as described above; an explicitly saved `null` remains `null`. Explicit `variant=null` omits the override for any model, including the old default. A string must appear in the local catalog's `available_variants`; unsupported variants fail before creating a session. The model list is not frozen: other IDs in either supported provider's configured OpenCode catalog can be selected.
 
 OpenCode 1.18.30 listed `low/high/max` for Go GLM, Go DeepSeek Flash and official Flash; official Pro listed `high/max` when checked on 2026-09-14. Use `ds_check` for the current configuration instead of assuming every model supports `max`.
 
@@ -67,7 +67,7 @@ For example, include these fields alongside the normal `task`, `workspace`, `sco
 ```
 
 ```json
-{ "provider": "deepseek", "model": "deepseek-flash" }
+{ "provider": "deepseek", "model": "deepseek-flash", "variant": "max" }
 ```
 
 The selected route is saved per agent and returned by spawn, wait, inspect, list and fork. Immediate/queued follow-ups and forks use the same selection even after a controller restart. Old saved sessions retain the original Go DeepSeek/max selection. Start a new worker to change model. A provider error or exhausted quota never authorizes an automatic fallback.

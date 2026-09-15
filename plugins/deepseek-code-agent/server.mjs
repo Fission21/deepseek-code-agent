@@ -18,7 +18,7 @@ const modelOptions = {
   },
   variant: {
     type: ["string", "null"], pattern: "^[A-Za-z0-9_-]+$",
-    description: "Reasoning variant supported by the selected model. Omitted resolves from the saved machine default when the provider/model pair matches it, else the runtime default (max only for Go deepseek-v4.1-flash). Explicit null uses the runtime default for any model.",
+    description: "Reasoning variant supported by the selected model. Omitted resolves from the saved machine default when the provider/model pair matches it, else max. Explicit null uses the runtime default for any model.",
   },
 };
 const modelDefaultsSchema = {

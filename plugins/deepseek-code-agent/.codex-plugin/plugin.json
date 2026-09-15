@@ -32,7 +32,7 @@
       "Interactive"
     ],
     "defaultPrompt": [
-      "Use Codex-native GPT-5.6 Luna with medium reasoning for this bounded implementation; do not use OpenCode or external credentials.",
+      "Use Codex-native GPT-5.6 Luna with maximum reasoning for this bounded implementation; do not use OpenCode or external credentials.",
       "Use DeepSeek or GLM to implement this coding goal, then review and verify its patch.",
       "Set OpenCode Go GLM 5.3 Flash with maximum reasoning as my machine default for new coding workers.",
       "Show the current OpenCode worker default and inspect the active coding agent."

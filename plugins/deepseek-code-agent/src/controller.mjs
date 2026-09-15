@@ -27,7 +27,7 @@ export function resolveModelSelection({ provider = PROVIDER_ID, model, variant }
     throw new Error("model must be a model ID without a provider prefix or whitespace");
   }
   if (variant === undefined) {
-    variant = provider === PROVIDER_ID && model === MODEL_ID ? VARIANT : null;
+    variant = VARIANT;
   }
   if (variant !== null && (typeof variant !== "string" || !/^[A-Za-z0-9_-]+$/.test(variant))) {
     throw new Error("variant must be a non-empty variant name or null for the model default");
@@ -40,7 +40,11 @@ const VARIANT_PATTERN = /^[A-Za-z0-9_-]+$/;
 const PROVIDER_DEFAULT_MODELS = { [PROVIDER_ID]: MODEL_ID, deepseek: "deepseek-flash" };
 
 function modelDefaultVariant(provider, model) {
-  return provider === PROVIDER_ID && model === MODEL_ID ? VARIANT : null;
+  // Every external worker lane starts at maximum reasoning unless the caller
+  // explicitly supplies a variant, including variant=null. The explicit null
+  // path is preserved by resolveEffectiveSelection and means "let the runtime
+  // choose" for callers that intentionally want that behavior.
+  return VARIANT;
 }
 
 export function resolveEffectiveSelection(options = {}, saved = null) {
