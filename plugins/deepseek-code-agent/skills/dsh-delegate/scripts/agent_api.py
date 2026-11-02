@@ -251,7 +251,7 @@ class AgentAPI:
             return observe(scheduler,params)
         method={'deliver_work':'review_team','stop_work':'cancel_team','close_work':'close_team'}.get(method,method)
         if method=='review_team':
-            return scheduler.review_team(params['team_id'],params['revisions'],params['summary'])
+            return scheduler.review_team(params['team_id'],params['revisions'],params['summary'],params.get('legacy_review_reason'))
         if method=='authorize_browser_action':
             from browser_gate import grant
             root=agent_path(self.root,params['agent_id'])

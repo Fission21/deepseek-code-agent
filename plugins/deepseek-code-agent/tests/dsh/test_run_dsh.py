@@ -47,6 +47,26 @@ class RunDSHTests(unittest.TestCase):
             *extra,
         ]
 
+    def test_legacy_controller_metadata_gets_shared_budget_before_new_execution(self):
+        from support import fund_fixture
+        registry=self.tmp/'registry';mailbox=registry/'old-agent'/'mailbox';mailbox.mkdir(parents=True)
+        fund_fixture(registry)
+        self.fake.write_text('#!'+sys.executable+'\n'+'''import sys,json,pathlib
+sys.stdin.read()
+for i,arg in enumerate(sys.argv):
+ if arg=='--patch':
+  try: value=json.loads(pathlib.Path(sys.argv[i+1]).read_text())
+  except ValueError: continue
+  for item in value:
+   for plugin in item.get('insert',[]):
+    if plugin['id']=='codex-controller-link':
+     assert plugin['config']['budget']['pool_id']=='offline-fixture'
+print(json.dumps({'type':'final','text':'Budget attached to legacy execution'}))
+''')
+        result=subprocess.run(self.command('--controller-mailbox',str(mailbox)),capture_output=True,text=True,env=self.env,timeout=20)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertEqual(read_json(self.result)['status'],'completed')
+
     def test_report_and_console_filter_thinking_tool_bodies_and_credentials(self):
         completed = subprocess.run(
             self.command("--events-file", str(self.events)),

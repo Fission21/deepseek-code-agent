@@ -197,6 +197,11 @@ def main():
                 team_path = a.controller_mailbox.parent / 'team.json'
                 if team_path.is_file():
                     link_config.update(json.loads(team_path.read_text()))
+                if not link_config.get('budget'):
+                    # Older connected controllers can still launch a new turn.
+                    # Attach the registry's authorized pool before any model process.
+                    from budget import BudgetLedger
+                    link_config['budget']=BudgetLedger(a.controller_mailbox.parent.parent).binding()
                 if runtime_root:
                     link_config['runtimeRoot'] = runtime_root
                 link.write_text(json.dumps([{'insert': [{

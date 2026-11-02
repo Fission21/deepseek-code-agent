@@ -7,7 +7,7 @@
 | 工具 | 用法 |
 |---|---|
 | `submit_work` | `tasks` 数组；单项任务也用同一入口。可给 `contract`、`max_parallel`、`budget_pool`、`review_policy`。 |
-| `observe_work` | 无 team_id 时列组；有 team_id 时观察决策事件和全组完成。复用原样返回的 cursor，等待不超过 55 秒。 |
+| `observe_work` | 无 team_id 时列组和未纳管旧会话（不启动它们）；有 team_id 时观察决策事件和全组完成。复用原样返回的 cursor，等待不超过 55 秒。 |
 | `send_message` | 纠偏给原 Worker；已停止任务可带 `expected_revision`。熔断后明确 `acknowledge_escalation` 并调整任务/limits。 |
 | `reply_agent` | 答复 request_id；普通回复不能替代浏览器动作授权。 |
 | `stop_work` | 暂停全组并收尾所属进程。 |
@@ -19,11 +19,11 @@
 
 ## 独立需求审阅
 
-`submit_work` 默认 `review_policy: independent`：每个工作区追加一个只读 reviewer，前置为该工作区所有实现任务，使用新建 DSH 会话。它得到原始需求、逐项验收标准、定稿契约和版本化证据；不继承实现者的聊天及成功叙述。reviewer 仍使用 Flash/max；独立性来自新会话与职责隔离，不宣称不同模型或一定判断正确。
+`submit_work` 默认 `review_policy: independent`：每个工作区追加一个只读 reviewer，前置为该工作区所有实现任务，使用新建 DSH 会话。它得到原始需求、context_files 需求附件、required_reads 必读规则、逐项验收标准、定稿契约和版本化证据；不继承实现者的聊天及成功叙述。reviewer 仍使用 Flash/max；独立性来自新会话与职责隔离，不宣称不同模型或一定判断正确。
 
 `complete_task` 的 `review_json` 必须逐项包含 criterion、pass/fail/unverified 和具体依据。缺项、自审会话、非 pass、源码指纹/修订改变都会阻止交付。只绑定声明的文件范围，不能证明未声明文件、外部页面或线上状态。reviewer 对缺少的业务证据应报 unverified。发现问题回责任 Worker；主对话仲裁后让原任务修复，再续接过期 reviewer，不替 Worker 修代码。
 
-低风险工作可用 `review_policy: light`，同时写清 `review_reason`；仍由主对话判断需求是否满足。旧 API 不指定策略时仅保留执行兼容，不自动获得“已验收”。新工作应使用 submit_work；历史工作缺独立审阅时不能直接补造通过。
+低风险工作可用 `review_policy: light`，同时写清 `review_reason`；仍由主对话判断需求是否满足。旧 API 不指定策略时仅保留执行兼容，不自动获得“已验收”。新工作应使用 submit_work；历史工作缺独立审阅时不能直接补造通过。仅对 0.5 之前缺少策略字段的旧任务，主对话可依据现有需求证据，在 deliver_work 中填写 legacy_review_reason 选择有理由的轻量审阅迁移；不重跑原实现、不改变旧结果。新提交的未设策略工作不能借此绕过策略。
 
 ## 共享消费预算
 

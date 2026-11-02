@@ -655,16 +655,17 @@ class Scheduler:
                 return False
         return True
 
-    def review_team(self, team, revisions, summary):
+    def review_team(self, team, revisions, summary, legacy_review_reason=None):
         from agent_api import bounded
         bounded(summary)
+        if legacy_review_reason is not None:bounded(legacy_review_reason)
         with self.db(True) as db:
             rows=[dict(r) for r in db.execute('SELECT * FROM tasks WHERE team_id=?',(team,))]
             if not rows or any(t['status']!='done' for t in rows):
                 raise ValueError('Only a completed team can be delivered')
             if revisions!={t['name']:t['revision'] for t in rows}:
                 raise ValueError('Stale task revisions')
-            validate_delivery(self,rows)
+            validate_delivery(self,rows,legacy_review_reason)
             for t in rows:
                 result=json.loads(t['result'] or '{}')
                 if not self.delivery_current(t,result):
@@ -674,6 +675,7 @@ class Scheduler:
                     if not p.is_file() or hashlib.sha256(p.read_bytes()).hexdigest()!=artifact['sha256']:
                         raise ValueError('Delivered artifact has changed')
             review={'status':'accepted','revisions':revisions,'summary':summary}
+            if legacy_review_reason:review['legacy_review_reason']=legacy_review_reason
             db.execute('INSERT OR REPLACE INTO reviews VALUES (?,?)',(team,json.dumps(review)))
             self.emit(db,team,None,'parent_delivery',review)
         return review

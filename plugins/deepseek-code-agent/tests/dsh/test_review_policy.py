@@ -9,6 +9,27 @@ class ReviewPolicyTests(unittest.TestCase):
     setUp=test_scheduler.SchedulerTests.setUp
     tearDown=test_scheduler.SchedulerTests.tearDown
     spec=test_scheduler.SchedulerTests.spec
+
+    def test_reviewer_receives_original_attachments_and_required_rules(self):
+        from review_policy import expand_review_tasks
+        tasks=expand_review_tasks({'review_policy':'independent','tasks':[
+            self.spec('a',context_files=['requirements.md'],required_reads=['rules.md']),
+            self.spec('b',context_files=['requirements.md','contract.md'],required_reads=['rules.md'])]})
+        reviewer=tasks[-1]
+        self.assertEqual(reviewer['context_files'],['requirements.md','contract.md'])
+        self.assertEqual(reviewer['required_reads'],['rules.md'])
+
+    def test_legacy_delivery_can_record_reasoned_light_review_without_rerunning(self):
+        team=self.scheduler.create_team({'tasks':[self.spec('a')]},start=False)
+        task=self.scheduler.claim_next();self.scheduler.finish(task,'done',{'summary':'old delivered result'})
+        with self.scheduler.db(True) as db:
+            spec=json.loads(task['spec']);spec.pop('delivery_review')
+            db.execute('UPDATE tasks SET spec=? WHERE agent_id=?',(json.dumps(spec),task['agent_id']))
+        with self.assertRaises(ValueError):self.scheduler.review_team(team['team_id'],{'a':1},'original result')
+        result=self.scheduler.review_team(team['team_id'],{'a':1},'Parent reviewed requirement evidence',legacy_review_reason='Read-only legacy investigation; parent inspected supplied sources')
+        self.assertEqual(result['status'],'accepted')
+        self.assertEqual(self.scheduler.task(task['agent_id'])['attempt'],1)
+        self.assertIn('legacy_review_reason',result)
     def test_light_review_requires_reason_and_unreviewed_legacy_cannot_deliver(self):
         with self.assertRaisesRegex(ValueError,'reason'):
             self.scheduler.create_team({'review_policy':'light','tasks':[self.spec('a')]},start=False)

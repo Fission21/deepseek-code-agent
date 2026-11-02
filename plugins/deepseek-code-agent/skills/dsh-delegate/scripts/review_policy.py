@@ -35,6 +35,8 @@ def expand_review_tasks(params):
                 'Original requirements: '+json.dumps(requirements,ensure_ascii=False)+
                 '\nShared contract: '+params.get('contract',''))
         extra={k:targets[0][k] for k in ('dsh','timeout_seconds','budget_pool') if k in targets[0]}
+        for field in ('context_files','required_reads'):
+            extra[field]=list(dict.fromkeys(value for target in targets for value in target.get(field,[])))
         specs.append(dict(extra,id='_review_'+str(n),workspace=workspace,task=prompt,
             scope_paths=[],depends_on=[s['id'] for s in targets],review_targets=[s['id'] for s in targets],
             review_criteria=[c['id'] for r in requirements for c in r['criteria']],review_paths=sorted(set(paths)),
@@ -68,11 +70,15 @@ def validate_review(scheduler,task,result):
                 raise ValueError('Reviewed source changed after review started')
 
 
-def validate_delivery(scheduler,rows):
+def validate_delivery(scheduler,rows,legacy_review_reason=None):
     for task in rows:
         spec=json.loads(task['spec']);policy=spec.get('delivery_review',{})
+        if 'delivery_review' not in spec and legacy_review_reason:
+            # Only records created before this policy existed may migrate here.
+            # New legacy API work has an explicit mode=legacy and cannot bypass it.
+            continue
         if policy.get('mode') not in ('independent','light'):
-            raise ValueError('No requirement review policy; legacy work needs an explicit review decision')
+            raise ValueError('No requirement review policy; pre-0.5 work can use deliver_work with legacy_review_reason after parent requirement review')
         if policy['mode']=='light' and not policy.get('reason','').strip():
             raise ValueError('Light review reason missing')
         if spec.get('review_targets'):validate_review(scheduler,task,json.loads(task['result'] or '{}'))

@@ -9,6 +9,16 @@ class AttentionTests(unittest.TestCase):
     tearDown=test_scheduler.SchedulerTests.tearDown
     spec=test_scheduler.SchedulerTests.spec
 
+    def test_observation_discovers_unmanaged_legacy_session_without_starting_it(self):
+        from agent_api import AgentAPI
+        from attention import observe
+        api=AgentAPI(self.scheduler.root)
+        agent=api._raw_call('spawn_agent',dict(self.spec('old'),_defer=True))
+        before=(self.scheduler.root/agent['agent_id']/'state.json').read_text()
+        result=observe(self.scheduler,{})
+        self.assertEqual([a['agent_id'] for a in result['unmanaged_agents']],[agent['agent_id']])
+        self.assertEqual((self.scheduler.root/agent['agent_id']/'state.json').read_text(),before)
+
     def test_progress_stays_silent_until_timeout_and_cursor_advances(self):
         from attention import observe
         t=self.scheduler.create_team({'tasks':[self.spec('a')]},start=False)

@@ -28,30 +28,37 @@
 ### Task 1: 每次模型请求的资金控制
 Files: scripts/budget.py, scripts/scheduler.py, scripts/run_dsh.py, runtime/budget_gate.mjs, runtime/controller_link.mjs, tests/dsh/test_budget.py, tests/budget-gate.test.mjs.
 Interfaces: BudgetLedger.configure(policy, default=False), binding(pool_id=None), reserve(pool_id, request_id, owner), settle(request_id, usage); middleware installBudgetGate(ctx, config).
-- [ ] RED: 原子预留、同键重放拒绝、结算幂等、未知用量不释放、过期/不匹配路由拒绝和 downstream 未调用。
-- [ ] GREEN: SQLite BEGIN IMMEDIATE 预留；llm/stream 前预留，上界校验，正常 usage 保守结算；错误保留预算；控制面配置池。
-- [ ] 执行定向 Python/Node 测试，记录实际结果。
+- [x] RED: 原子预留、同键重放拒绝、结算幂等、未知用量不释放、过期/不匹配路由拒绝和 downstream 未调用。
+- [x] GREEN: SQLite BEGIN IMMEDIATE 预留；llm/stream 前预留，上界校验，正常 usage 保守结算；错误保留预算；控制面配置池。
+- [x] 执行定向 Python/Node 测试，记录实际结果。
 ### Task 2: 独立需求审阅
 Files: scripts/review_policy.py, scripts/scheduler.py, runtime/controller_link.mjs, tests/dsh/test_review_policy.py.
 Interfaces: expand_review_tasks(params), validate_review(task, result, dependencies); review_team enforces policy.
-- [ ] RED: 独立新会话、逐需求判定、拒绝自审/漏项/过时指纹、轻量豁免需理由。
-- [ ] GREEN: 按 workspace 生成只读 reviewer，原始任务与验收标准传入；源码与修订绑定；问题返回责任 Worker。
-- [ ] 定向测试通过。
+- [x] RED: 独立新会话、逐需求判定、拒绝自审/漏项/过时指纹、轻量豁免需理由。
+- [x] GREEN: 按 workspace 生成只读 reviewer，原始任务与验收标准传入；源码与修订绑定；问题返回责任 Worker。
+- [x] 定向测试通过。
 ### Task 3: 按需观察与八个日常接口
 Files: scripts/attention.py, scripts/agent_api.py, scripts/mcp_server.py, tests/dsh/test_attention.py, tests/dsh/test_mcp.py.
 Interfaces: submit_work, observe_work, send_message, reply_agent, stop_work, authorize_browser_action, deliver_work, close_work. observe_work supports wait and compact delta; no hidden push claim.
-- [ ] RED: 普通进度不提前唤醒、阻塞/授权/升级/整体完成返回、游标去重、八工具发现与旧请求兼容。
-- [ ] GREEN: 程序过滤、增量状态、终态去重，保留显式诊断查询；高级操作保留 CLI。
-- [ ] 定向测试通过。
+- [x] RED: 普通进度不提前唤醒、阻塞/授权/升级/整体完成返回、游标去重、八工具发现与旧请求兼容。
+- [x] GREEN: 程序过滤、增量状态、终态去重，保留显式诊断查询；高级操作保留 CLI。
+- [x] 定向测试通过。
 ### Task 4: 恢复语义、等待约束与交付
 Files: scripts/watchdog.py, scripts/scheduler.py, references/*, SKILL.md, README*.md, tests/dsh/test_reliability_runtime.py.
-- [ ] 回归调度器死亡恢复、Worker 不确定状态暂停、预算预留跨重启保留及原子名额领取。
-- [ ] 阻止运行中对排队同伴发起会占位等待的问答；依赖预声明，超时不等于同意。
-- [ ] 文档明确账本事实源、幂等范围、故障边界、价格上界及宿主限制，版本 0.5.0。
-- [ ] 全套离线测试；一次全新上下文独立审阅，必要修复后同步 GitHub/本机并收尾。
+- [x] 回归调度器死亡恢复、Worker 不确定状态暂停、预算预留跨重启保留及原子名额领取。
+- [x] 阻止运行中对排队同伴发起会占位等待的问答；依赖预声明，超时不等于同意。
+- [x] 文档明确账本事实源、幂等范围、故障边界、价格上界及宿主限制，版本 0.5.0。
+- [x] 全套离线测试；一次全新上下文独立审阅，三个 P2 已修复。
+- [ ] 同步 GitHub/本机并收尾。
 
 ## Progress
 - Baseline: 02b8a9f67cbca0abb313f3a053292ddd681bf5b2.
 - Ruling: 复用既有 docs/plans 路径，按当前明确认可继续实施，不重复审批。
 - Ruling: 预算未配置时拒绝新执行；不会为用户擅自设置金额或价格。成本是首次使用需配置一次明确授权预算。
 - Ruling: 只实现本机可提供的 attention long-poll，后台主对话唤醒仍需宿主支持。宿主若每次空超时都回模型，仍有等待成本。
+
+- User allocation: 100 CNY shared DSH total, separate from business AI budget; no paid DSH calls in this upgrade.
+- Validation: Python 115 run / 114 pass / 1 skip; Node 133 run / 132 pass / 1 skip. Native Cordis/LLM direct and prepared streams exercised with an offline adapter.
+- Final review: original context propagation, unmanaged-session discovery and pre-0.5 delivery migration corrected via RED/GREEN. Runner also binds the authorized shared pool for new turns launched from old metadata.
+- Ruling: SDK core module fingerprints pin the audited call/retry boundary. Unmetered native web helpers are blocked; assigned Chrome remains available. Known media retry uncertainty retains an extra ceiling; text requests settle measured usage at conservative rates.
+- Ruling: User requested no added verification ceremony. Skill reference changes follow exercised API contracts; one whole-branch review, no multi-rep model pressure tests.

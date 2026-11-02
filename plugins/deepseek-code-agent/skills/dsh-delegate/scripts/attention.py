@@ -10,8 +10,12 @@ DECISIONS={'question','blocked','failed','escalated','blocked_budget','blocked_v
 
 def observe(scheduler,params):
     if not params.get('team_id'):
+        from agent_api import AgentAPI
+        sessions=AgentAPI(scheduler.root)._raw_call('list_agents',{})['agents']
         with scheduler.db() as db:
+            managed={r[0] for r in db.execute('SELECT agent_id FROM tasks')}
             return {'teams':[dict(r) for r in db.execute('SELECT id AS team_id,title,state FROM teams ORDER BY created DESC')],
+                    'unmanaged_agents':[a for a in sessions if a['agent_id'] not in managed],
                     'delivery_mode':'long_poll','host_push_available':False}
     cursor=params.get('cursor') or {}
     if not isinstance(cursor,dict) or set(cursor)-{'seq','terminal'}:raise ValueError('Invalid observation cursor')

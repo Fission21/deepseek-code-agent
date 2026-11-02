@@ -126,7 +126,9 @@ TOOLS = [
     by_name['reply_agent'],
     tool('stop_work','Pause the team and stop its owned executions; preserve sessions.',TEAM,('team_id',)),
     by_name['authorize_browser_action'],
-    tool('deliver_work','Record the parent delivery decision. Requires current revisions, evidence, and the selected independent/light requirement review. Findings go back to their owner.',by_name['review_team']['inputSchema']['properties'],('team_id','revisions','summary')),
+    tool('deliver_work','Record the parent delivery decision. Requires current revisions, evidence, and the selected independent/light requirement review. Findings go back to their owner.',{
+        **by_name['review_team']['inputSchema']['properties'],
+        'legacy_review_reason':dict(LONG_STRING,description='Only pre-0.5 tasks: reasoned parent requirement review of existing results, without rerunning implementation')},('team_id','revisions','summary')),
     tool('close_work','Close the team and retain results after collaboration ends.',TEAM,('team_id',)),
 ]
 # Old connected clients can finish their work. Legacy tools are callable but are
