@@ -72,6 +72,14 @@ def install_fake(path):
     return path
 
 
+def fund_fixture(root):
+    from budget import BudgetLedger
+    BudgetLedger(root).configure(dict(pool_id='offline-fixture',limit_micros=1000000000,
+        provider='deepseek-official',model='deepseek-flash',input_price_micros=1,
+        output_price_micros=1,max_input_tokens=1000000,max_output_tokens=256000,
+        attempt_bound=2,expires_at=time.time()+3600),default=True)
+
+
 def read_json(path):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
@@ -139,6 +147,7 @@ class DSHTestCase(unittest.TestCase):
 
         from agent_api import AgentAPI
         self.api = AgentAPI(self.root)
+        fund_fixture(self.root)
 
     def tearDown(self):
         for agent_id in list(self.agents):

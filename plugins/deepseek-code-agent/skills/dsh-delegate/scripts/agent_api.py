@@ -243,6 +243,13 @@ class AgentAPI:
             require_supported()
         from scheduler import Scheduler, LIVE, READY
         scheduler = Scheduler(self.root)
+        if method=='submit_work':
+            return scheduler.create_team(dict(params,review_policy=params.get('review_policy','independent')))
+        if method=='observe_work':
+            from attention import observe
+            scheduler.kick()
+            return observe(scheduler,params)
+        method={'deliver_work':'review_team','stop_work':'cancel_team','close_work':'close_team'}.get(method,method)
         if method=='review_team':
             return scheduler.review_team(params['team_id'],params['revisions'],params['summary'])
         if method=='authorize_browser_action':
@@ -289,6 +296,9 @@ class AgentAPI:
         if not task and params.get('agent_id'):
             task=scheduler.adopt_agent(params['agent_id'])
         if task and method=='send_message':
+            if params.get('expected_revision') is not None:
+                return scheduler.resume(task['agent_id'],params['message'],expected_revision=params['expected_revision'],
+                    acknowledge_escalation=params.get('acknowledge_escalation',False),new_limits=params.get('limits'))
             return scheduler.deliver_message(task['agent_id'],params['message'])
         if task and method in ('interrupt_agent','close_agent'):
             scheduler.cancel([task['agent_id']],close=method=='close_agent')

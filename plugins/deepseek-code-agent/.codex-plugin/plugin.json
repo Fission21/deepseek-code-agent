@@ -1,6 +1,6 @@
 {
   "name": "deepseek-code-agent",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Explicit-only local DeepSeek Harness (DSH) delegation with concurrent teams and a separate legacy OpenCode/Luna lane.",
   "author": {
     "name": "Fission21",

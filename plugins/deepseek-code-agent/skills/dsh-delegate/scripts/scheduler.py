@@ -19,6 +19,8 @@ import uuid
 from context_packet import write_scope
 from paths import require_supported
 from reliability import acceptance, limits, fingerprint, stalled
+from budget import BudgetLedger
+from review_policy import expand_review_tasks, validate_review, validate_delivery
 from worker import save, read_state, locked, launch, recover_orphan
 
 HERE = Path(__file__).resolve().parent
@@ -118,7 +120,7 @@ class Scheduler:
         for path in self.root.glob('dsh-*/state.json'):
             if not (path.parent/'team.json').exists() and read_state(path.parent).get('active'):
                 self.adopt_agent(path.parent.name)
-        specs = params['tasks']
+        specs = expand_review_tasks(params)
         if not isinstance(params.get('contract', ''), str) or len(params.get('contract', '')) > 12000:
             raise ValueError('Contract must contain at most 12000 characters')
         if not isinstance(specs, list) or not 1 <= len(specs) <= 32:
@@ -135,6 +137,7 @@ class Scheduler:
                 raise ValueError('Workspace must be an existing absolute directory')
             workspace = workspace.resolve()
             s = dict(s, workspace=str(workspace))
+            s['budget']=BudgetLedger(self.root).binding(s.get('budget_pool',params.get('budget_pool')))
             s['limits'] = limits(s.get('limits'))
             s['acceptance'] = acceptance(s.get('acceptance'), s['task'], workspace)
             graph[s['id']] = s.get('depends_on', [])
@@ -185,6 +188,8 @@ class Scheduler:
                 api._raw_call('spawn_agent', dict(s, task=prompt, _agent_id=aid, _defer=True))
                 prepared.append(task_root)
                 save(task_root / 'team.json', {'team_id':team,'task_id':s['id'],'peers':names,
+                                             'budget':s['budget'],
+                                             'review_criteria':s.get('review_criteria',[]),
                                              'require_completion':not legacy, 'acceptance':s['acceptance'],
                                              'limits':s['limits'], 'contract':params.get('contract',''), 'contract_revision':1})
                 dependency_file = task_root / 'dependencies.txt'
@@ -220,6 +225,7 @@ class Scheduler:
         spec = json.loads(task['spec'])
         writes = [Path(spec['workspace']) / x for x in spec.get('scope_paths', [])]
         reads = [Path(a['path']) for item in json.loads(task.get('inputs') or '[]') for a in item.get('artifacts',[])]
+        reads += [Path(spec['workspace'])/p for p in spec.get('review_paths',[])]
         keys = set(spec.get('resources', []))
         if spec.get('tab_id') is not None:
             keys.add('browser:huashu:shared-chrome')
@@ -237,7 +243,10 @@ class Scheduler:
                 missing.append({'task_id':name, 'status':dep['status']})
             else:
                 result = json.loads(dep['result'] or '{}')
-                inputs.append(dict(task_id=name, revision=dep['revision'], summary=result.get('summary',''), rationale=result.get('rationale',''), checks=result.get('checks',''), open_issues=result.get('open_issues',''), acceptance=result.get('acceptance'), artifacts=result.get('artifacts',[])))
+                if json.loads(task['spec']).get('review_targets'):
+                    inputs.append(dict(task_id=name,revision=dep['revision'],acceptance=result.get('acceptance'),artifacts=result.get('artifacts',[])))
+                else:
+                    inputs.append(dict(task_id=name, revision=dep['revision'], summary=result.get('summary',''), rationale=result.get('rationale',''), checks=result.get('checks',''), open_issues=result.get('open_issues',''), acceptance=result.get('acceptance'), artifacts=result.get('artifacts',[])))
         return inputs, missing
 
     def claim_next(self):
@@ -251,6 +260,13 @@ class Scheduler:
             for raw in rows:
                 t = dict(raw)
                 if sum(r['team_id']==t['team_id'] for r in running) >= team_limits.get(t['team_id'], limit):
+                    continue
+                try:
+                    binding=json.loads(t['spec']).get('budget') or BudgetLedger(self.root).binding()
+                    BudgetLedger(self.root).admit(binding['pool_id'])
+                except ValueError as exc:
+                    db.execute("UPDATE tasks SET status='blocked_budget',error=? WHERE agent_id=?",(str(exc),t['agent_id']))
+                    self.emit(db,t['team_id'],t['name'],'blocked_budget',{'summary':str(exc)})
                     continue
                 inputs, missing = self.dependency_inputs(db, t)
                 if missing:
@@ -270,6 +286,11 @@ class Scheduler:
                 t['inputs']=json.dumps(inputs)
                 if any(self.conflict(t,r) for r in running):
                     continue
+                spec=json.loads(t['spec'])
+                if spec.get('review_targets'):
+                    binding=fingerprint(spec['workspace'],spec['review_paths'])
+                    for item in inputs:item['review_fingerprint']=binding
+                    t['inputs']=json.dumps(inputs)
                 db.execute("UPDATE tasks SET status='running',attempt=attempt+1,started=?,inputs=?,error=NULL WHERE agent_id=?",(time.time(),t['inputs'],t['agent_id']))
                 t.update(status='running',attempt=t['attempt']+1,started=time.time())
                 db.execute('INSERT OR REPLACE INTO dispatch_order VALUES (?,?)',(t['team_id'],time.time()))
@@ -334,6 +355,8 @@ class Scheduler:
             except (OSError,ValueError) as exc:
                 return 'blocked',{'summary':str(exc)}
         result['acceptance']=report.get('acceptance')
+        try: validate_review(self,task,result)
+        except (OSError,ValueError) as exc:return 'blocked',dict(result,summary=str(exc))
         return outcome,result
 
     def finish(self, task, status, result):
@@ -422,9 +445,11 @@ class Scheduler:
                           or (event_type=='question' and rounds>=policy['max_peer_rounds'])
                           or message.get('contract_revision',1)!=1)
                 target=db.execute('SELECT * FROM tasks WHERE team_id=? AND name=?',(task['team_id'],message.get('target'))).fetchone()
-                if rejected or not target or target['status'] not in LIVE+READY:
+                waiting_peer=target and event_type=='question' and target['status'] not in LIVE
+                acceptable=target and (target['status'] in LIVE+READY or (target['status']=='done' and event_type in ('blocked','artifact_ready')))
+                if rejected or not acceptable or waiting_peer:
                     kind='peer_rejected'
-                    message=dict(message,reason='Peer budget, contract, correlation or recipient rejected; ask parent to arbitrate')
+                    message=dict(message,reason='Peer budget/contract rejected or recipient is not running. Never occupy a slot waiting for a queued peer; declare dependencies or ask parent to arbitrate.')
                 else:
                     mid='peer-'+hashlib.sha256((task['agent_id']+message['id']).encode()).hexdigest()
                     mailbox=self.root/target['agent_id']/'mailbox'
@@ -571,6 +596,9 @@ class Scheduler:
             if expected_revision is not None and t['revision'] != expected_revision:
                 raise ValueError('Stale task revision; read current state before writing')
             spec=json.loads(t['spec']); policy=limits(spec.get('limits'))
+            spec['budget']=BudgetLedger(self.root).binding(spec.get('budget',{}).get('pool_id'))
+            BudgetLedger(self.root).admit(spec['budget']['pool_id'])
+            db.execute('UPDATE tasks SET spec=? WHERE agent_id=?',(json.dumps(spec),agent_id))
             health=db.execute('SELECT failures,elapsed FROM task_health WHERE agent_id=?',(agent_id,)).fetchone()
             exhausted=health and (health[0]>=policy['max_failures'] or health[1]>=policy['max_elapsed_seconds'])
             if (t['status']=='escalated' or exhausted) and not acknowledge_escalation:
@@ -607,6 +635,7 @@ class Scheduler:
                 state.update(paused=False,error=None,state='queued')
             meta=json.loads((root/'team.json').read_text()) if (root/'team.json').exists() else {}
             meta['limits']=spec.get('limits',policy)
+            meta['budget']=spec['budget']
             save(root/'team.json',meta)
             db.execute("UPDATE tasks SET status='queued',revision=revision+1,result=NULL,error=NULL WHERE agent_id=?",(agent_id,))
             db.execute("UPDATE teams SET state='active' WHERE id=?",(t['team_id'],))
@@ -635,6 +664,7 @@ class Scheduler:
                 raise ValueError('Only a completed team can be delivered')
             if revisions!={t['name']:t['revision'] for t in rows}:
                 raise ValueError('Stale task revisions')
+            validate_delivery(self,rows)
             for t in rows:
                 result=json.loads(t['result'] or '{}')
                 if not self.delivery_current(t,result):

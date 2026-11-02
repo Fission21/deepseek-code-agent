@@ -1,6 +1,6 @@
 # DeepSeek Code Agent for Codex
 
-Version 0.4.0. This plugin enables local **DeepSeek Harness (DSH)** only when explicitly selected for the current task and keeps the previous OpenCode/Luna controller as an explicit legacy lane.
+Version 0.5.0. This plugin enables local **DeepSeek Harness (DSH)** only when explicitly selected for the current task and keeps the previous OpenCode/Luna controller as an explicit legacy lane.
 
 Full setup, platform status, security notes, and historical benchmark caveats are in the [repository README](../../README.md) ([中文](../../README.zh-CN.md)).
 
@@ -63,15 +63,9 @@ npm run check:legacy
 
 ## Use
 
-Ask Codex to delegate to DSH, or explicitly invoke `$dsh-delegate`. The eight single-agent tools are `spawn_agent`, `send_message`, `wait_agent`, `inspect_agent`, `reply_agent`, `interrupt_agent`, `list_agents`, and `close_agent`.
+The default MCP surface has eight intent-based tools: submit_work, observe_work, send_message, reply_agent, stop_work, authorize_browser_action, deliver_work and close_work. Legacy API calls remain compatible. Native model requests require an authorized shared budget; unknown usage retains reservations. New submissions use fresh requirement reviewers unless a low-risk light review is justified. Ordinary events remain silent; observation is long-poll, not idle-host push.
 
-For parallel work, use `create_team`, `inspect_team`, `wait_team`, `resume_task`, `cancel_team`, `close_team`, `set_concurrency`, and `set_team_concurrency`. Global concurrency defaults to 2; each team can set its own ceiling, still within the global limit. Raising or lowering it changes future dispatch without interrupting running tasks. [Team contract and example](skills/dsh-delegate/references/teams.md).
-
-- `scope_paths` is an assignment boundary, not an OS sandbox.
-- `context_files` / `required_reads` are explicit text only: 64 KiB per file, 160 KiB per packet; no credentials or private Codex session logs.
-- Timeout, interrupt, and controller errors pause without replaying an uncertain write. `send_message` resumes the same session.
-- Pending questions wait up to 180 seconds; a timeout is not consent.
-- State defaults to `~/.local/share/dsh-delegate/agents`; idle agents keep files, not a daemon.
+[Full control contract and boundaries](skills/dsh-delegate/references/control.md). The parent leads and arbitrates; original workers own repairs. This does not add a duplicate full test pass.
 
 ## Browser
 

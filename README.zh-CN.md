@@ -2,9 +2,9 @@
 
 [English](./README.md) | 简体中文
 
-**v0.4.0 状态：** 本机 **DeepSeek Harness（DSH）** 仅在用户明确指定本次任务时启用，支持并发任务组。旧 OpenCode/Luna 通道仍保留，但只作为显式 legacy 选择；用户明确要求 DSH 时，安装本插件不会静默替换成 OpenCode 或 Luna。
+**v0.5.0 状态：** 本机 **DeepSeek Harness（DSH）** 仅在用户明确指定本次任务时启用，支持并发任务组。旧 OpenCode/Luna 通道仍保留，但只作为显式 legacy 选择；用户明确要求 DSH 时，安装本插件不会静默替换成 OpenCode 或 Luna。
 
-插件提供 `dsh_agents` MCP、`dsh-delegate` Skill 和当前 DSH 控制器实现：18 个协作操作（含主对话交付记录与浏览器动作授权）、持久会话、显式上下文包、`deepseek-official / deepseek-flash` + `max` 推理、可选的当前 Chrome huashu 链路，以及保留的旧 `deepseek_code_agent` MCP 与 `ds_*` 工具。
+插件提供 `dsh_agents` MCP、`dsh-delegate` Skill 和当前 DSH 控制器实现：8 个日常协作工具，兼容旧 API（含主对话交付记录与浏览器动作授权）、持久会话、显式上下文包、`deepseek-official / deepseek-flash` + `max` 推理、可选的当前 Chrome huashu 链路，以及保留的旧 `deepseek_code_agent` MCP 与 `ds_*` 工具。
 
 本仓库**不声称 DSH 有固定省 token 收益**。DSH 是外部独立持久会话，有自己的工具和历史；Codex 只发送主对话选择的上下文，不会自动继承 Codex 的全部私有工具、会话或聊天历史。仓库里的历史 benchmark 只属于其原始通道和设置，不是当前 DSH 的实测。
 
@@ -29,6 +29,12 @@ flowchart TB
       B1["DSH B1：独立任务"]
     end
   end
+  EXEC --> Q["Fresh requirement reviewer / justified light review"]
+  Q --> D["Codex delivery decision; findings return to owner"]
+  EXEC --> G["Per-request atomic budget reservation"]
+  G --> L["DSH model API; unknown usage keeps reservation"]
+  DB --> E["Decision events only; long-poll, no host push"]
+  E --> P
   EXEC --> T["代码、文件、终端；按任务分配范围"]
   EXEC --> C["浏览器工具门：指定 tab/origin；默认只读；写入一次许可"]
 ```
@@ -41,8 +47,8 @@ flowchart TB
 
 ## 包含内容
 
-- **`dsh_agents`**：显式选择 DSH 后使用，提供 `spawn_agent`、`send_message`、`wait_agent`、`inspect_agent`、`reply_agent`、`interrupt_agent`、`list_agents`、`close_agent`。
-- **`dsh-delegate`**：关闭隐式触发，覆盖 DSH 单代理/团队协作、当前 Chrome 和同一套 18 接口。
+- **`dsh_agents`**：显式选择 DSH 后使用，提供 `submit_work`, `observe_work`, `send_message`, `reply_agent`, `stop_work`, `authorize_browser_action`, `deliver_work`, `close_work`。
+- **`dsh-delegate`**：关闭隐式触发，覆盖 DSH 单代理/团队协作、当前 Chrome 和同一套 8 个日常入口。
 - **DSH 运行时**：`scheduler.py`、`worker.py`、`run_dsh.py`、`agent_api.py`、`context_packet.py`、`mcp_server.py`、controller link 和 `config/max.yml`，位于 `plugins/deepseek-code-agent/skills/dsh-delegate/`。
 - **Legacy 通道**：原 OpenCode 控制器（`server.mjs`、`ds_*`）与旧 Skill 仍可用；旧 Skill 已关闭隐式触发。
 - **不打包凭据**：不含 API key、Codex/DSH 会话记录、npm 缓存、用户 Chrome 配置、cookie 或浏览数据。
@@ -96,53 +102,26 @@ DSH 安装位置特殊时，可在启动 Codex 前配置：
 
 ## 使用 DSH
 
-用自然语言提出，或显式调用 Skill：
+仅在用户明确指定本次任务使用 DSH 时启用。新工作先绑定用户授权的共享预算。
 
-```text
-使用 $dsh-delegate 完成这个有界改动，运行相关测试、修复失败并汇报结果。
-```
-
-主对话通常按以下顺序调用：
-
-1. `spawn_agent`：传入 `task`、`workspace`、`scope_paths`，以及经选择的 `context_files` / `required_reads`。
-2. `wait_agent`：需要进度、待答问题或结果时，带上返回的 `cursor`。
-3. `send_message`：纠偏并续用同一会话；`reply_agent`：回答真正的待答问题。
-4. `inspect_agent`：紧凑查看状态；方向错误时 `interrupt_agent`。
-5. `list_agents`：重启后恢复控制；协作结束时 `close_agent`。
-
-### 八个单代理操作
-
-| 操作 | 作用 |
+| 工具 | 作用 |
 |---|---|
-| `spawn_agent` | 创建持久 DSH 执行者，立即返回。 |
-| `send_message` | 补充上下文或纠偏；运行中在下一模型边界进入，空闲时续用原会话。 |
-| `wait_agent` | 最多等 55 秒，返回新消息、待答问题、完成、失败或暂停；复用 cursor。 |
-| `inspect_agent` | 不等待，读取紧凑状态。 |
-| `reply_agent` | 回答 `request_id`，原执行继续。 |
-| `interrupt_agent` | 停止当前执行并清理本代理进程组，保留会话。 |
-| `list_agents` | 列出本适配器记录的代理。 |
-| `close_agent` | 结束协作，保留会话/结果记录。 |
+| `submit_work` | 派发 tasks，默认追加新会话独立 reviewer；低风险 light 需要理由。 |
+| `observe_work` | 列组或等待决策/全组完成；复用 cursor，普通进度静默。 |
+| `send_message` | 纠偏给原 Worker； stopped 续接可带 expected_revision。 |
+| `reply_agent` | 答复待处理问题。 |
+| `stop_work` | 暂停全组并停止所属执行。 |
+| `authorize_browser_action` | 发放确切动作的一次许可。 |
+| `deliver_work` | 主对话依据当前修订与需求审阅记录交付。 |
+| `close_work` | 结束协作并保留结果。 |
 
-`scope_paths` 是任务边界，不是 OS 权限白名单。`context_files` 和 `required_reads` 是显式文本材料，单份上限 64 KiB，整包 160 KiB；DSH 会原生读取适用的 `AGENTS.md`。不导出凭据、私有 Codex 会话或无关文件。
+并发全局默认 2、可配置 1–8；组上限是全局池内的占用天花板。依赖、共享文件与 Chrome 冲突由调度器处理，数量由主对话根据可独立推进的工作决定。领取是一次事务，没有部分占位后等待另一额度。旧 18 项 API 仍兼容，完整状态和额度调整留在 JSON CLI。
 
-超时、中断和控制器错误会暂停会话，不会自动重放不确定的写入；后续 `send_message` 在同一会话中带明确纠正继续。待答问题最多等 180 秒，超时不是同意。
+预算在每次原生模型请求前原子预留，额度不足不再派新任务/发新请求；已预留请求可结束。缺少有效预算、价格或路由上界就拒绝。未决用量不退款，账本是保守上界而非发票。当前原生网页 search/fetch 未纳入这条请求链，会被拦截；花叔 Chrome 保留。DSH 模块升级需要重新确认已审计的请求边界。
 
-### 并发任务组
+独立 reviewer 使用同模型的新会话，从原始需求逐项判断；问题回原 Worker，主对话裁决，不默认接手修复。轻量任务允许有理由地省去独立 reviewer。observe_work 是长轮询，不是空闲宿主唤醒；空超时若触发主模型仍有费用。Watchdog 恢复调度，Worker 结果不明则暂停；没有 OS 开机托管或通用外部副作用重放保证。
 
-`create_team({title, max_parallel, tasks})` 将独立任务并行、依赖阶段接续。各任务沿用单代理参数，并增加 `id`、`depends_on`、`outputs` 和 `resources`。完整示例与约定见[并发任务组](plugins/deepseek-code-agent/skills/dsh-delegate/references/teams.md)。
-
-| 操作 | 作用 |
-|---|---|
-| `create_team` | 创建任务组，`max_parallel` 可选，省略则继承全局。 |
-| `inspect_team` / `wait_team` | 查看或等待全组进度、容量、结果和等待原因。 |
-| `resume_task` | 原会话返工或续接；上游返工使受影响下游过期。 |
-| `cancel_team` / `close_team` | 暂停全组 / 结束协作，按归属收尾执行。 |
-| `set_concurrency` | 调整跨聊天共享的全局上限，默认 2，范围 1–8。 |
-| `set_team_concurrency` | 仅调整本组上限；`null` 恢复继承。 |
-
-两个示例组共用全局额度，不能把 2 和 1 相加理解为同时运行 3 项。调高组上限后符合条件的任务启动；调低不会打断已运行任务。主对话根据独立工作数量、依赖和资源决定并发，不按难度评分自动扩容。
-
-组内 DSH 使用 `send_peer` 通信，完成时调用 `complete_task` 提交结果；下游在前置完成后接收摘要、修订和产物。`capacity` 与 `waiting_reasons` 直接解释资源/依赖/名额等待；`eligible_now` 是当前条件信息，不是名额预留。共享浏览器任务串行，文件范围是协作锁而非 OS 沙箱。
+完整参数、兼容说明和恢复语义见[控制与交付](plugins/deepseek-code-agent/skills/dsh-delegate/references/control.md)。
 
 ### 默认值与上下文
 

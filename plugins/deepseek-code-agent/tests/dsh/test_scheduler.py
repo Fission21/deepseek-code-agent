@@ -20,6 +20,8 @@ class SchedulerTests(unittest.TestCase):
         self.workspace = self.base / 'work'; self.workspace.mkdir()
         self.fake = install_fake(self.base / 'fake-dsh')
         self.scheduler = Scheduler(self.base / 'registry')
+        from support import fund_fixture
+        fund_fixture(self.scheduler.root)
 
     def tearDown(self):
         if hasattr(self, 'tmp'): self.tmp.cleanup()

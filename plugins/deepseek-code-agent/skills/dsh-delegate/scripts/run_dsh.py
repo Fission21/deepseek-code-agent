@@ -192,6 +192,7 @@ def main():
                     'invocation': str(a.result_file),
                     'questionTimeoutMs': 180000,
                     'workspace': str(a.cwd),
+                    'budgetPython': sys.executable,
                 }
                 team_path = a.controller_mailbox.parent / 'team.json'
                 if team_path.is_file():

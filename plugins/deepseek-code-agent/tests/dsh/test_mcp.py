@@ -44,11 +44,8 @@ class MCPFramingTests(unittest.TestCase):
         self.assertEqual(by_id[1]["result"]["protocolVersion"], "2025-06-18")
         names = {tool["name"] for tool in by_id[2]["result"]["tools"]}
         self.assertEqual(names, {
-            "spawn_agent", "send_message", "wait_agent", "inspect_agent",
-            "reply_agent", "interrupt_agent", "list_agents", "close_agent",
-            "create_team", "inspect_team", "wait_team", "resume_task",
-            "cancel_team", "close_team", "set_concurrency", "set_team_concurrency",
-            "review_team", "authorize_browser_action",
+            "submit_work", "observe_work", "send_message", "reply_agent",
+            "stop_work", "authorize_browser_action", "deliver_work", "close_work",
         })
         self.assertEqual(json.loads(by_id[3]["result"]["content"][0]["text"]), {"agents": []})
         self.assertEqual(by_id[None]["error"]["code"], -32700)
@@ -59,9 +56,9 @@ class MCPFramingTests(unittest.TestCase):
 
         tools = {tool["name"]: tool for tool in mcp_server.TOOLS}
         self.assertNotIn("ds_spawn_agent", tools)
-        self.assertEqual(tools["spawn_agent"]["inputSchema"]["required"], ["task", "workspace"])
-        self.assertEqual(tools["wait_agent"]["inputSchema"]["properties"]["timeout_seconds"]["maximum"], 55)
-        self.assertEqual(tools["spawn_agent"]["inputSchema"]["properties"]["task"]["maxLength"], 12000)
+        self.assertEqual(tools["submit_work"]["inputSchema"]["required"], ["tasks"])
+        self.assertEqual(tools["observe_work"]["inputSchema"]["properties"]["timeout_seconds"]["maximum"], 55)
+        self.assertEqual(tools["submit_work"]["inputSchema"]["properties"]["tasks"]["items"]["properties"]["task"]["maxLength"], 12000)
 
 
 @unittest.skipUnless(os.name == "posix", "DSH execution is POSIX-only")

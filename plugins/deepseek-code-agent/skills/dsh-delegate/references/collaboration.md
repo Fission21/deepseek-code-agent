@@ -1,8 +1,6 @@
 # 协作接口
 
-提供与子代理相近的八个单代理操作：`spawn_agent`、`send_message`、`wait_agent`、`inspect_agent`、`reply_agent`、`interrupt_agent`、`list_agents`、`close_agent`。MCP 注册名为 `dsh_agents`，与旧 OpenCode 的 `deepseek_code_agent` 独立。
-
-并行任务另有 `create_team`、`inspect_team`、`wait_team`、`resume_task`、`cancel_team`、`close_team`、`set_concurrency` 和 `set_team_concurrency`，详见[并发任务组](teams.md)。
+日常 MCP 仅呈现 `submit_work`、`observe_work`、`send_message`、`reply_agent`、`stop_work`、`authorize_browser_action`、`deliver_work`、`close_work`。参数、预算、审阅和宿主边界见[控制与交付](control.md)。下文旧 JSON 示例是兼容入口，用于接续旧任务；新任务使用 submit_work。
 
 ## 直接调用
 

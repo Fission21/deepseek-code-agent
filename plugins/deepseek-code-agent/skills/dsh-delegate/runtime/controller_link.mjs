@@ -2,9 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {pathToFileURL} from 'node:url';
+import {installBudgetGate,installToolBudgetGuard,assertAuditedRuntime} from './budget_gate.mjs';
 
 export const name = 'codex-controller-link';
-export const inject = ['tools'];
+export const inject = ['tools','llm'];
 
 function write(file, data) {
   const tmp = file + '.' + randomUUID() + '.tmp';
@@ -158,10 +159,11 @@ export function createLink(ctx, config, {createUserMessage, defineTool}) {
     ctx.tools.register(defineTool({
       name:'complete_task',
       description:'Record the task outcome after owning implementation, relevant checks and repairs. done releases dependents only after this execution finishes; blocked/failed keeps them waiting. Include why you chose the implementation and any remaining issues. The parent decides overall delivery; you own repairs.',
-      parameters:{outcome:{type:'string',required:true},summary:{type:'string',required:true},checks:{type:'string',required:true},rationale:{type:'string'},open_issues:{type:'string'}},output,
+      parameters:{outcome:{type:'string',required:true},summary:{type:'string',required:true},checks:{type:'string',required:true},rationale:{type:'string'},open_issues:{type:'string'},review_json:{type:'string'}},output,
       async execute(args) {
         if (!['done','blocked','failed'].includes(args.outcome)) throw new Error('Use done, blocked or failed');
         const result={outcome:args.outcome,summary:text(args.summary),checks:text(args.checks),rationale:args.rationale?text(args.rationale):'',open_issues:args.open_issues?text(args.open_issues):'',invocation:config.invocation};
+        if(config.review_criteria?.length)result.review=JSON.parse(text(args.review_json));
         write(path.join(base,'completion.json'),result);
         emit('outcome',result.summary,{outcome:result.outcome});
         return 'Outcome recorded. Finish with a short final response; dependent tasks are released after this turn ends.';
@@ -204,9 +206,12 @@ export function createLink(ctx, config, {createUserMessage, defineTool}) {
 
 export async function apply(ctx, config) {
   const base = runtimeBase(config);
+  assertAuditedRuntime(base);
   const [{createUserMessage},{defineTool}] = await Promise.all([
     import(pathToFileURL(path.join(base,'dsh-llm/lib/index.js')).href),
     import(pathToFileURL(path.join(base,'dsh-tools/lib/index.js')).href)
   ]);
   createLink(ctx,config,{createUserMessage,defineTool});
+  installBudgetGate(ctx,config);
+  installToolBudgetGuard(ctx);
 }

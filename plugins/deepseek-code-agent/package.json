@@ -1,6 +1,6 @@
 {
   "name": "deepseek-code-agent-codex-plugin",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "description": "Explicit-only local DeepSeek Harness (DSH) delegation with concurrent teams and a separate legacy OpenCode/Luna lane.",
@@ -9,7 +9,7 @@
     "check:dsh": "node ./dsh-server.mjs --check",
     "check:legacy": "node ./scripts/check-prereqs.mjs",
     "test": "node ./scripts/test-all.mjs",
-    "test:node": "node --test ./tests/controller.test.mjs ./tests/mcp.test.mjs ./tests/workflow-core.test.mjs ./tests/verification.test.mjs ./tests/routing-policy.test.mjs ./tests/install.test.mjs ./tests/controller-link.test.mjs ./tests/team-controller-link.test.mjs",
+    "test:node": "node --test ./tests/controller.test.mjs ./tests/mcp.test.mjs ./tests/workflow-core.test.mjs ./tests/verification.test.mjs ./tests/routing-policy.test.mjs ./tests/install.test.mjs ./tests/controller-link.test.mjs ./tests/team-controller-link.test.mjs ./tests/budget-gate.test.mjs",
     "test:dsh": "node ./scripts/test-all.mjs --python-only",
     "test:legacy-live": "node ./tests/live-smoke.mjs"
   },

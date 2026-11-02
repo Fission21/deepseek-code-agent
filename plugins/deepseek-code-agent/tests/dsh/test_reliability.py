@@ -17,7 +17,7 @@ class ReliabilityTests(fixtures.SchedulerTests):
         self.assertEqual(self.scheduler.task(second['agent_id'])['status'], 'running')
 
     def test_second_failure_requires_parent_override(self):
-        team = self.scheduler.create_team({'tasks':[self.spec('a')]}, start=False)
+        team = self.scheduler.create_team({'review_policy':'light','review_reason':'Offline lifecycle fixture','tasks':[self.spec('a')]}, start=False)
         aid = team['tasks'][0]['agent_id']
         with patch('scheduler.Scheduler.kick'):
             self.scheduler.finish(self.scheduler.claim_next(), 'failed', {'summary':'bad'})
@@ -28,7 +28,7 @@ class ReliabilityTests(fixtures.SchedulerTests):
         self.assertEqual(self.scheduler.inspect_team(team['team_id'])['tasks'][0]['status'], 'escalated')
 
     def test_stale_revision_does_not_queue_a_turn(self):
-        team = self.scheduler.create_team({'tasks':[self.spec('a')]}, start=False)
+        team = self.scheduler.create_team({'review_policy':'light','review_reason':'Offline lifecycle fixture','tasks':[self.spec('a')]}, start=False)
         aid = team['tasks'][0]['agent_id']
         self.scheduler.finish(self.scheduler.claim_next(), 'done', {})
         with patch('scheduler.Scheduler.kick'):
@@ -55,7 +55,7 @@ class ReliabilityTests(fixtures.SchedulerTests):
         self.assertEqual(len(list(box.glob('*.json'))), 2)
 
     def test_final_review_rejects_stale_task_revision(self):
-        team = self.scheduler.create_team({'tasks':[self.spec('a')]}, start=False)
+        team = self.scheduler.create_team({'review_policy':'light','review_reason':'Offline lifecycle fixture','tasks':[self.spec('a')]}, start=False)
         aid = team['tasks'][0]['agent_id']
         self.scheduler.finish(self.scheduler.claim_next(), 'done', {})
         self.scheduler.review_team(team['team_id'], {'a':1}, 'Reviewed final diff and acceptance results')
@@ -70,7 +70,7 @@ class ReliabilityTests(fixtures.SchedulerTests):
     def test_parent_delivery_rejects_changed_tested_source(self):
         from reliability import fingerprint
         source=self.workspace/'source.py';source.write_text('one')
-        team=self.scheduler.create_team({'tasks':[self.spec('a',acceptance={'criteria':['passes'],'commands':[['true']],'paths':['source.py']})]},start=False)
+        team=self.scheduler.create_team({'review_policy':'light','review_reason':'Offline source binding fixture','tasks':[self.spec('a',acceptance={'criteria':['passes'],'commands':[['true']],'paths':['source.py']})]},start=False)
         task=self.scheduler.claim_next()
         self.scheduler.finish(task,'done',{'acceptance':{'passed':True,'fingerprint':fingerprint(self.workspace,['source.py'])}})
         source.write_text('two')

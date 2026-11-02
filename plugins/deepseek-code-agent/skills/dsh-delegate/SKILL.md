@@ -15,14 +15,15 @@ description: Use ONLY when the user explicitly requests DSH delegation for the c
 
 优先调用 `dsh_agents` MCP 的工具。若当前聊天尚未加载新工具，使用 [同一接口的 JSON 调用方式](references/collaboration.md)，无需用户代传消息或手工创建任务文件。
 
-多个可拆分任务使用 `create_team` / `wait_team`。主对话根据独立任务数量、依赖和共享资源设置本组 `max_parallel`，可用 `set_team_concurrency` 运行中调整；全局默认并发 2。状态直接显示容量和等待原因，不因任务复杂就自动提高全局额度。详见[并发、交接和团队消息](references/teams.md)。
+新任务统一使用 `submit_work`，单任务也是 tasks 数组。默认独立需求审阅；低风险任务可传 `review_policy: light` 和具体 `review_reason`。提前绑定用户已授权的共享 DSH 预算，不借用业务测试预算。完整约定见[0.5 控制与交付](references/control.md)。
 
-1. `spawn_agent`：给目标、工作区、文件归属及必要背景。像给原生子代理派活一样说明预期结果；不必逐步指挥它怎么做。已有并行改动要保留，有冲突才隔离。
-2. `wait_agent`：带上上次返回的 `cursor`，收到新进度、问题或结果再处理。DSH 原生工具调用的名称和阶段可用于监督，不需要读取思考过程。
-3. `send_message`：随时补充上下文或纠偏。执行中的消息在下一模型步骤进入；空闲时自动续用同一会话。
-4. `reply_agent`：回答 DSH 的实际阻塞问题。主对话能决定的直接决定；只有缺少用户决定时才问用户。不要把 DSH 的每次提问都转给用户。
-5. `interrupt_agent`：需要立即停止方向错误的执行时使用；工具会处理本代理的进程组收尾。之后 `send_message` 继续同一会话。
-6. 结果按通常使用子代理的方式汇总、审阅和整合。需要返工就发回原代理；结束协作用 `close_agent`。
+1. `submit_work`：给原始目标、验收标准、工作区和归属；主对话按独立工作量设置 `max_parallel`，全局默认 2。
+2. `observe_work`：无 team_id 可列组；带 team_id/cursor 只等决策和全组完成，普通进度静默。它是最多 55 秒的长轮询，不能主动唤醒空闲主对话；不要空转追问。
+3. `send_message` / `reply_agent`：纠偏给原 Worker，回答实际阻塞。停止后的任务续接带 `expected_revision`；熔断后主对话明确调整 allocation 并带 `acknowledge_escalation`。
+4. `stop_work`：暂停全组。浏览器确切写动作另用 `authorize_browser_action`，已有用户授权无需重复请示。
+5. reviewer 从原始需求和产物逐项判断，问题回责任 Worker；`deliver_work` 记录主对话最终决定，`close_work` 结束协作。主对话不默认接手修复、不重复有效测试。
+
+旧 18 项 API 保留兼容，完整诊断和并发配置通过 JSON CLI；新 MCP 发现仅呈现以上八个工具。
 
 同一代理的后续消息、纠偏和中断续接沿用 `session_id`，不会静默新建会话；cursor 只排除已经交付的消息/结果。超时、中断或控制器错误会保留会话并暂停，不自动重放不确定的写入。待答问题最多等候 180 秒，超时不是同意。
 
@@ -35,11 +36,11 @@ description: Use ONLY when the user explicitly requests DSH delegation for the c
 
 ## 可靠性与交付
 
-派发时给出验收标准和必要测试；程序记录证据并限制重试。主对话依据结果决定交付，关键改动按需审阅；不默认重跑检查或接手修复。集成问题由集成负责人定位，再交回责任 Worker。详见[验收、熔断、Watchdog、消息约束和浏览器授权](references/reliability.md)。
+派发时给出验收标准和必要测试；程序记录证据，按请求预留消费预算并限制重试。独立 reviewer 的新会话不继承实现者聊天；低风险豁免须说明理由。主对话依据结果决定交付，关键改动按需审阅；不默认重跑检查或接手修复。集成问题由集成负责人定位，再交回责任 Worker。详见[验收、熔断、Watchdog、消息约束和浏览器授权](references/reliability.md)。
 
 ## 当前 Chrome
 
-`spawn_agent` 传入已分配的 `tab_id` 和预期 `url`，即可启用花叔 MCP，使用当前 Chrome 的登录会话。将目标操作及授权范围交给 DSH；它负责交互、结果检查和普通定位问题。当前共享 Chrome 的浏览器任务串行执行，即使分配不同标签页也共用登录状态。工具入口默认只读；确切写操作由主对话根据已有用户授权发放一次许可，不重复向用户请示。真实登录态不等于授权支付、发消息、删除或写业务数据。详见 [浏览器与底层调用](references/execution.md)。
+`submit_work` 的对应 task 传入已分配的 `tab_id` 和预期 `url`，即可启用花叔 MCP，使用当前 Chrome 的登录会话。将目标操作及授权范围交给 DSH；它负责交互、结果检查和普通定位问题。当前共享 Chrome 的浏览器任务串行执行，即使分配不同标签页也共用登录状态。工具入口默认只读；确切写操作由主对话根据已有用户授权发放一次许可，不重复向用户请示。真实登录态不等于授权支付、发消息、删除或写业务数据。详见 [浏览器与底层调用](references/execution.md)。
 
 ## 安装与平台
 
@@ -54,6 +55,6 @@ node <plugin-root>/dsh-server.mjs --check
 
 ## 能力边界
 
-这是本地 DSH 的协作接口，不是把 DSH 注册为 Codex 内部模型。它拥有自己的工具和持久会话，接收选择后的上下文；不会自动得到 Codex 全部私有工具与聊天历史。正在执行的单个工具不会因普通消息自动撤销，需要停止时用 `interrupt_agent` 或 `cancel_team`。主对话不应承诺固定省 token；历史 benchmark 只是历史证据，不是当前 DSH 的实测结果。
+这是本地 DSH 的协作接口，不是把 DSH 注册为 Codex 内部模型。它拥有自己的工具和持久会话，接收选择后的上下文；不会自动得到 Codex 全部私有工具与聊天历史。正在执行的单个工具不会因普通消息自动撤销，需要停止时用 `stop_work`。主对话不应承诺固定省 token；历史 benchmark 只是历史证据，不是当前 DSH 的实测结果。
 
 文件归属与 `tab_id` 是任务边界，不替代用户授权。运行不复制凭据、不更改 DSH 全局模型配置。注册表与结果默认保存在 `~/.local/share/dsh-delegate/agents`，空闲代理不运行后台工作进程。

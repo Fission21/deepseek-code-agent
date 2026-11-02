@@ -39,5 +39,6 @@ if (!pythonOnly) {
     "./tests/install.test.mjs",
     "./tests/controller-link.test.mjs",
     "./tests/team-controller-link.test.mjs",
+    "./tests/budget-gate.test.mjs",
   ]);
 }

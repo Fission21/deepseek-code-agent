@@ -2,9 +2,9 @@
 
 English | [简体中文](./README.zh-CN.md)
 
-**v0.4.0 status:** local **DeepSeek Harness (DSH)** is enabled only when the user explicitly selects it for the current task, with concurrent team support. The older OpenCode/Luna lane is still shipped, but only as an explicit legacy choice. Installing this plugin does not silently substitute OpenCode or Luna when the user asks for DSH.
+**v0.5.0 status:** local **DeepSeek Harness (DSH)** is enabled only when the user explicitly selects it for the current task, with concurrent team support. The older OpenCode/Luna lane is still shipped, but only as an explicit legacy choice. Installing this plugin does not silently substitute OpenCode or Luna when the user asks for DSH.
 
-The plugin gives Codex a `dsh_agents` MCP server, a `dsh-delegate` Skill, and the current DSH controller implementation: 18 collaboration operations, including parent delivery decisions and exact browser action grants, persistent sessions, selected-context packets, the `deepseek-official / deepseek-flash` model with `max` reasoning, optional current-Chrome control through huashu-chrome, and the legacy `deepseek_code_agent` MCP with its original `ds_*` tools.
+The plugin gives Codex a `dsh_agents` MCP server, a `dsh-delegate` Skill, and the current DSH controller implementation: 8 daily collaboration tools (with legacy API compatibility), including parent delivery decisions and exact browser action grants, persistent sessions, selected-context packets, the `deepseek-official / deepseek-flash` model with `max` reasoning, optional current-Chrome control through huashu-chrome, and the legacy `deepseek_code_agent` MCP with its original `ds_*` tools.
 
 There is **no claim of fixed token savings** for DSH. DSH is an external, independently persistent session with its own tools and history. Codex sends only the context the parent selects; DSH does not automatically inherit all private Codex tools, sessions, or conversation history. Older benchmark documents in this repository remain historical evidence for their original lanes and setups, not measurements of the current DSH lane.
 
@@ -29,6 +29,12 @@ flowchart TB
       B1["DSH B1: independent task"]
     end
   end
+  EXEC --> Q["Fresh requirement reviewer / justified light review"]
+  Q --> D["Codex delivery decision; findings return to owner"]
+  EXEC --> G["Per-request atomic budget reservation"]
+  G --> L["DSH model API; unknown usage keeps reservation"]
+  DB --> E["Decision events only; long-poll, no host push"]
+  E --> P
   EXEC --> T["Code, files, terminal: assigned task scope"]
   EXEC --> C["Browser gate: assigned tab/origin; read-only default; one-use writes"]
 ```
@@ -41,8 +47,8 @@ Tasks carry acceptance criteria and optional argv checks bound to explicit sourc
 
 ## What is included
 
-- **`dsh_agents`** — explicitly selected DSH MCP server exposing `spawn_agent`, `send_message`, `wait_agent`, `inspect_agent`, `reply_agent`, `interrupt_agent`, `list_agents`, and `close_agent`.
-- **`dsh-delegate`** — explicit-only Skill for single-agent/team collaboration, current-Chrome work, and the same 18-operation contract.
+- **`dsh_agents`** — explicitly selected DSH MCP server exposing `submit_work`, `observe_work`, `send_message`, `reply_agent`, `stop_work`, `authorize_browser_action`, `deliver_work`, `close_work`.
+- **`dsh-delegate`** — explicit-only Skill for single-agent/team collaboration, current-Chrome work, and the same 8-tool contract.
 - **DSH runtime** — `scheduler.py`, `worker.py`, `run_dsh.py`, `agent_api.py`, `context_packet.py`, `mcp_server.py`, the controller link, and `config/max.yml` under `plugins/deepseek-code-agent/skills/dsh-delegate/`.
 - **Legacy lane** — the existing OpenCode controller (`server.mjs`, `ds_*` tools) and legacy Skill remain available for explicit OpenCode/Luna requests. The legacy Skill has implicit invocation disabled.
 - **No bundled credentials** — no API keys, DSH/Codex session records, npm cache, user Chrome profile, cookies, or browser data.
@@ -96,53 +102,26 @@ Do not put credentials in prompts, task files, repository files, or this plugin.
 
 ## Use DSH
 
-Ask in ordinary language, or invoke the Skill explicitly:
+Use DSH only when explicitly selected for this task. Configure one authorized shared budget before execution.
 
-```text
-Use $dsh-delegate to implement this bounded change, run the relevant tests, fix failures, and report the result.
-```
-
-The parent typically calls:
-
-1. `spawn_agent` with `task`, `workspace`, `scope_paths`, and selected `context_files` / `required_reads`.
-2. `wait_agent` with the returned `cursor` when it needs progress, a pending question, or the result.
-3. `send_message` to correct the same session, or `reply_agent` to answer a real pending question.
-4. `inspect_agent` for a compact status check, and `interrupt_agent` when the direction is wrong.
-5. `list_agents` to recover control after a restart, and `close_agent` when the collaboration ends.
-
-### The eight single-agent operations
-
-| Operation | Purpose |
+| Tool | Purpose |
 |---|---|
-| `spawn_agent` | Start a persistent DSH worker; returns immediately. |
-| `send_message` | Add context or a correction. Running work receives it at the next model boundary; idle work resumes the same session. |
-| `wait_agent` | Wait up to 55 seconds for new messages, a pending question, completion, failure, or a paused state. Reuse the cursor. |
-| `inspect_agent` | Read compact status without waiting. |
-| `reply_agent` | Answer a pending `request_id`; the same execution continues. |
-| `interrupt_agent` | Stop the current execution and clean its owned process group while preserving the session. |
-| `list_agents` | List recorded agents managed by this adapter. |
-| `close_agent` | Close the collaboration and keep its session/result records. |
+| `submit_work` | Submit tasks; fresh requirement reviewers by default, or justified light review. |
+| `observe_work` | List teams or wait for decisions/whole-team completion, using the returned cursor. |
+| `send_message` | Correct the original owner; stopped tasks can use expected_revision. |
+| `reply_agent` | Answer a pending question. |
+| `stop_work` | Pause the team and stop its owned executions. |
+| `authorize_browser_action` | Grant one exact authorized action. |
+| `deliver_work` | Record the parent decision against current revisions and requirement review. |
+| `close_work` | End collaboration and retain results. |
 
-`scope_paths` is an assignment boundary, not an OS permission allowlist. `context_files` and `required_reads` are explicit text materials, limited to 64 KiB per file and 160 KiB per packet. DSH loads applicable `AGENTS.md` natively. Credentials, private Codex sessions, and unrelated files are not exported.
+Global capacity defaults to 2 (configurable 1–8); team limits are ceilings within that pool. A single transaction claims one task only when all constraints permit. Old 18-operation API calls remain compatible; detailed diagnostics and capacity controls stay on the JSON CLI.
 
-Timeout, interrupt, and controller errors pause the session; they do not automatically replay an uncertain write. A later `send_message` resumes the same session with a clear correction. Pending questions wait up to 180 seconds; a timeout is not consent.
+Every native model request reserves a conservative monetary bound atomically. Exhaustion stops dispatch and new requests; already reserved requests may finish. Missing/expired policy, unknown route or bounds deny dispatch. Unknown outcomes keep reservations. Accounting is an upper bound, not an invoice. Native web search/fetch bypass this model seam and are currently blocked; assigned huashu Chrome remains available. Runtime module changes require renewed transport-bound auditing.
 
-### Concurrent teams
+A reviewer uses a new same-model session and the original criteria, not implementation history. Findings return to their owner; the parent arbitrates and decides delivery without routinely taking over repairs. Low-risk light review needs a reason. Observation is long-poll, not idle-host push: empty host timeouts can still cost model rounds. Watchdog restores supervision; uncertain worker effects pause without replay. There is no OS startup service or universal external-side-effect exactly-once guarantee.
 
-`create_team({title, max_parallel, tasks})` runs independent tasks concurrently and releases later stages after their dependencies finish. Tasks retain the single-agent parameters and add `id`, `depends_on`, `outputs`, and `resources`. See the [team reference](plugins/deepseek-code-agent/skills/dsh-delegate/references/teams.md) for the complete contract and example.
-
-| Operation | Purpose |
-|---|---|
-| `create_team` | Create a team; optional `max_parallel` inherits the global ceiling when omitted. |
-| `inspect_team` / `wait_team` | Inspect or wait for team progress, capacity, results, and waiting reasons. |
-| `resume_task` | Continue or revise the original session; upstream revisions invalidate affected descendants. |
-| `cancel_team` / `close_team` | Pause the team / end collaboration and stop owned executions. |
-| `set_concurrency` | Set the global ceiling shared across chats: default 2, configurable from 1 to 8. |
-| `set_team_concurrency` | Change only this team's ceiling; `null` restores inheritance. |
-
-The example teams share the global ceiling: their limits of 2 and 1 do not permit three simultaneous executions. Raising a team ceiling releases eligible queued work; lowering it lets running work finish. The parent chooses capacity from independent work, dependencies, and resource constraints, without a difficulty-scoring model or automatic global expansion.
-
-Team workers use `send_peer` to communicate and `complete_task` to deliver outcomes. Dependents receive completed summaries, revisions, and artifacts. `capacity` and `waiting_reasons` explain resource, dependency, or slot waits; `eligible_now` is a snapshot, not a slot reservation. Shared browser tasks run serially. File ownership is a coordination lock, not an OS sandbox.
+See the [control contract](plugins/deepseek-code-agent/skills/dsh-delegate/references/control.md) for configuration and limitations.
 
 ### Defaults and context
 

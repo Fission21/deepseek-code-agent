@@ -24,7 +24,7 @@ for i,x in enumerate(a):
    for plugin in item.get('insert',[]):
     if plugin['id']=='codex-controller-link':config=plugin['config']
 assert config
-spec=json.loads(re.search(r'FIXTURE (\{[^\n]+\})',p).group(1))
+spec={} if config.get('review_criteria') else json.loads(re.search(r'FIXTURE (\{[^\n]+\})',p).group(1))
 session=a[a.index('--session-id')+1] if '--session-id' in a else 'session-'+config['task_id']
 print(json.dumps({'type':'session','sessionId':session}),flush=True)
 name=config['task_id']; path=pathlib.Path(name+'.run.json')
@@ -38,7 +38,7 @@ if spec.get('requires'):
 for target,value in spec.get('files',{}).items():pathlib.Path(target).write_text(value)
 record['end']=time.time();path.write_text(json.dumps(record))
 if not spec.get('missing_completion'):
- pathlib.Path(config['mailbox'],'completion.json').write_text(json.dumps({'invocation':config['invocation'],'outcome':spec.get('outcome','done'),'summary':'fixture '+name,'checks':'fixture checked'}))
+ pathlib.Path(config['mailbox'],'completion.json').write_text(json.dumps({'invocation':config['invocation'],'outcome':spec.get('outcome','done'),'summary':'fixture '+name,'checks':'fixture checked','review':[{'criterion':c,'verdict':'pass','evidence':'source.txt inspected by offline fixture'} for c in config.get('review_criteria',[])]}))
 print(json.dumps({'type':'final','text':'fixture finished'}),flush=True)
 '''
 
@@ -50,6 +50,8 @@ class RuntimeTests(unittest.TestCase):
         self.base=Path(self.tmp.name);self.work=self.base/'work';self.work.mkdir()
         self.fake=self.base/'fake-dsh';self.fake.write_text('#!'+sys.executable+'\n'+FAKE);self.fake.chmod(0o700)
         self.api=AgentAPI(self.base/'registry');self.s=Scheduler(self.api.root);self.teams=[]
+        from support import fund_fixture
+        fund_fixture(self.api.root)
 
     def tearDown(self):
         for t in self.teams:self.api.call('close_team',{'team_id':t})

@@ -109,7 +109,29 @@ TOOLS += [
     tool('authorize_browser_action','Grant one exact pending browser action already authorized by the user. Inspect browser_requests first; ordinary replies do not grant actions. Expires in 60 seconds and is consumed before execution.',
          {**AGENT,'request_id':STRING,'expected_revision':{'type':'integer','minimum':1},'reason':LONG_STRING},('agent_id','request_id','expected_revision','reason')),
 ]
-TOOL_NAMES = {item['name'] for item in TOOLS}
+LEGACY_TOOLS = TOOLS
+by_name = {item['name']:item for item in LEGACY_TOOLS}
+submission = dict(by_name['create_team']['inputSchema']['properties'],
+    review_policy={'type':'string','enum':['independent','light'],'default':'independent'},
+    review_reason=dict(LONG_STRING,description='Required for low-risk light review; explain why a fresh reviewer is unnecessary'),
+    budget_pool=dict(STRING,description='Explicitly configured shared budget pool; otherwise registry default'))
+TOOLS = [
+    tool('submit_work','Submit explicitly authorized DSH work with requirements and acceptance. Independent review uses a fresh read-only session; light review requires a risk reason. An authorized shared budget must already be configured.',submission,('tasks',)),
+    tool('observe_work','List teams or wait for decisions and overall completion. Routine progress remains in the ledger. Pass cursor for deduplication. Long-poll only: this cannot wake an idle host chat; timeout can still cause a model round.',{
+        **TEAM,'cursor':{'type':'object','properties':{'seq':{'type':'integer','minimum':0},'terminal':{'type':['string','null']}},'additionalProperties':False},
+        'timeout_seconds':{'type':'number','minimum':0,'maximum':55,'default':0}},(),True),
+    tool('send_message','Send a correction to the owner. For a stopped task use its expected_revision; acknowledge_escalation explicitly reopens a failed-task circuit. Running tasks receive ordinary messages at model boundaries.',{
+        **AGENT,'message':LONG_STRING,'expected_revision':{'type':'integer','minimum':1},
+        'acknowledge_escalation':{'type':'boolean'},'limits':LIMITS},('agent_id','message')),
+    by_name['reply_agent'],
+    tool('stop_work','Pause the team and stop its owned executions; preserve sessions.',TEAM,('team_id',)),
+    by_name['authorize_browser_action'],
+    tool('deliver_work','Record the parent delivery decision. Requires current revisions, evidence, and the selected independent/light requirement review. Findings go back to their owner.',by_name['review_team']['inputSchema']['properties'],('team_id','revisions','summary')),
+    tool('close_work','Close the team and retain results after collaboration ends.',TEAM,('team_id',)),
+]
+# Old connected clients can finish their work. Legacy tools are callable but are
+# deliberately absent from new discovery; advanced diagnostics stay on the CLI.
+TOOL_NAMES = {item['name'] for item in TOOLS+LEGACY_TOOLS}
 
 
 def dispatch(api, request):
@@ -121,11 +143,11 @@ def dispatch(api, request):
         return {
             'protocolVersion': version,
             'capabilities': {'tools': {}},
-            'serverInfo': {'name': 'dsh-agents', 'version': '0.4.0'},
+            'serverInfo': {'name': 'dsh-agents', 'version': '0.5.0'},
             'instructions': (
                 'Use DSH only when the user explicitly requests this collaborating worker. Lead, send corrections and answer '
-                'questions; DSH owns implementation, testing and repairs. No DSH-specific second '
-                'verification workflow is required. Legacy ds_* tools are a separate explicit lane.'
+                'questions; DSH owns implementation, testing and repairs. Use risk-based requirement review without '
+                'repeating valid checks. observe_work is long-poll, not host push. Legacy ds_* tools are a separate explicit lane.'
             ),
         }
     if method == 'ping':
@@ -165,7 +187,7 @@ def serve(api):
                 request = json.loads(line)
                 if isinstance(request, dict) and 'id' in request:
                     name=request.get('params',{}).get('name')
-                    pool=waiters if request.get('method')=='tools/call' and name in ('wait_agent','wait_team') else executor
+                    pool=waiters if request.get('method')=='tools/call' and name in ('wait_agent','wait_team','observe_work') else executor
                     pool.submit(respond, request)
             except ValueError:
                 with output_lock:
