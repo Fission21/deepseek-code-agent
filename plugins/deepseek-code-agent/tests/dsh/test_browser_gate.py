@@ -60,7 +60,7 @@ class BrowserGateTests(unittest.TestCase):
     def test_stdio_proxy_uses_real_upstream_and_suppresses_unassigned_tabs(self):
         import subprocess,sys
         fake=self.root/'fake_mcp.py'
-        fake.write_text("import sys,json\nfor line in sys.stdin:\n r=json.loads(line)\n if 'id' not in r:continue\n p=r.get('params',{}); name=p.get('name')\n data={'content':[{'type':'text','text':'共 1 个标签页（test）\\n[7] * page — https://example.com/page' if name=='tabs' else 'snapshot only'}]}\n print(json.dumps({'jsonrpc':'2.0','id':r['id'],'result':data}),flush=True)\n")
+        fake.write_text("import sys,json\nfor line in sys.stdin:\n r=json.loads(line)\n if 'id' not in r:continue\n p=r.get('params',{}); name=p.get('name')\n data={'content':[{'type':'text','text':'共 1 个标签页（test）\\n[7] * page — https://example.com/page' if name=='tabs' else 'snapshot only'}]}\n print(json.dumps({'jsonrpc':'2.0','id':r['id'],'result':data}),flush=True)\n",encoding='utf-8')
         policy=self.root/'policy.json';policy.write_text(json.dumps(self.policy))
         request={'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'snapshot','arguments':{'tabId':7}}}
         result=subprocess.run([sys.executable,str(SCRIPTS/'browser_gate.py'),'--policy',str(policy),sys.executable,str(fake)],input=json.dumps(request)+'\n',capture_output=True,text=True,timeout=10)
@@ -68,3 +68,32 @@ class BrowserGateTests(unittest.TestCase):
         reply=json.loads(result.stdout)
         self.assertEqual(reply['result']['content'][0]['text'],'snapshot only')
         self.assertNotIn('个标签页',result.stdout)
+
+    def test_authorization_request_does_not_store_editable_or_locator_values(self):
+        secret='SECRET-INPUT-DO-NOT-PERSIST'
+        result=self.call('fill',{'tabId':7,'fields':[{'ref':'e1','text':secret}], 'selector':'input[value="'+secret+'"]'})
+        self.assertTrue(result['isError'])
+        requests=list((self.root/'browser').glob('*.json'))
+        self.assertEqual(len(requests),1)
+        record=json.loads(requests[0].read_text())
+        self.assertNotIn(secret,requests[0].read_text())
+        self.assertNotIn(secret,json.dumps(result))
+        self.assertEqual(record['review']['tool'],'fill')
+        self.assertEqual(len(record['arguments_sha256']),64)
+
+    def test_malformed_params_do_not_end_the_proxy_session(self):
+        for bad in (None,[],17,'invalid'):
+            result=self.gate.dispatch('tools/call',bad)
+            self.assertTrue(result['isError'])
+        self.assertNotIn('isError',self.call('snapshot',{'tabId':7}))
+
+    def test_upstream_non_object_messages_are_ignored_and_bad_results_are_errors(self):
+        import sys
+        from browser_gate import Upstream
+        fake=self.root/'noisy_mcp.py'
+        fake.write_text("import json,sys\nn=0\nfor line in sys.stdin:\n r=json.loads(line); n+=1\n print('null',flush=True)\n print('[]',flush=True)\n print(json.dumps({'jsonrpc':'2.0','id':r['id'],'result':[] if n==1 else {'ok':True}}),flush=True)\n",encoding='utf-8')
+        upstream=Upstream([sys.executable,str(fake)])
+        try:
+            with self.assertRaises(ValueError):upstream.call('ping',{})
+            self.assertEqual(upstream.call('ping',{}),{'ok':True})
+        finally:upstream.close()

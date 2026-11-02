@@ -19,10 +19,27 @@ WRITE = {'click','type','select','fill','key','navigate','act'}
 
 
 def origin(url):
-    p=urlsplit(url)
-    if p.scheme not in ('http','https') or not p.hostname or p.username or p.password:
-        raise ValueError('Only credential-free http(s) origins are supported')
-    return (p.scheme,p.hostname,p.port or (443 if p.scheme=='https' else 80))
+    try:
+        p=urlsplit(url)
+        if p.scheme not in ('http','https') or not p.hostname or p.username or p.password:
+            raise ValueError('Invalid origin')
+        return (p.scheme,p.hostname,p.port or (443 if p.scheme=='https' else 80))
+    except (ValueError,TypeError,AttributeError):
+        raise ValueError('Only credential-free http(s) origins are supported') from None
+
+
+def review_metadata(name, args, allowed_origin):
+    # Input values and free-form selectors can contain credentials. They never
+    # enter durable requests/events; the full payload remains bound by a digest.
+    result={'tool':name,'tab_id':args['tabId'],'origin':list(allowed_origin)}
+    if isinstance(args.get('ref'),str) and re.fullmatch(r'e[0-9]+(?:@f[0-9]+)?',args['ref']):
+        result['ref']=args['ref']
+    if isinstance(args.get('fields'),list):
+        result['field_count']=len(args['fields'])
+    if isinstance(args.get('steps'),list):
+        result['step_count']=len(args['steps'])
+        result['actions']=[v.get('do') for v in args['steps'] if isinstance(v,dict) and v.get('do') in WRITE|{'wait','scroll','read','repeat','if','assert'}]
+    return result
 
 
 def grant(mailbox, request_id, invocation, reason, ttl=60):
@@ -98,11 +115,15 @@ class BrowserGate:
 
     def dispatch(self, method, params):
         try:
+            if not isinstance(method,str) or not isinstance(params,dict):
+                raise ValueError('MCP method and object parameters required')
             if method in ('initialize','ping','notifications/initialized'):
                 return self.upstream(method,params)
             if method=='tools/list':
                 data=self.upstream(method,params)
-                data['tools']=[t for t in data.get('tools',[]) if t.get('name') in READ|WRITE]
+                if not isinstance(data,dict) or not isinstance(data.get('tools'),list):
+                    raise ValueError('Invalid upstream tool list')
+                data['tools']=[t for t in data['tools'] if isinstance(t,dict) and t.get('name') in READ|WRITE]
                 return data
             if method!='tools/call':
                 raise ValueError('Unsupported MCP method')
@@ -115,7 +136,10 @@ class BrowserGate:
                 request_id='b-'+hashlib.sha256(json.dumps(body,sort_keys=True).encode()).hexdigest()
                 request=self.root/(request_id+'.json');permit=self.root/(request_id+'.grant');used=self.root/(request_id+'.used')
                 if not request.exists():
-                    save(request,dict(body,id=request_id,created=time.time()))
+                    save(request,{'id':request_id,'created':time.time(),'invocation':body['invocation'],
+                                  'page_sha256':body['page_sha256'],
+                                  'arguments_sha256':hashlib.sha256(json.dumps(args,sort_keys=True).encode()).hexdigest(),
+                                  'review':review_metadata(name,args,self.allowed_origin)})
                 authorized=False
                 if permit.exists() and not used.exists():
                     data=json.loads(permit.read_text())
@@ -136,12 +160,12 @@ class BrowserGate:
 class Upstream:
     def __init__(self, command):
         self.process=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True)
-        self.responses=queue.Queue();self.sequence=0
+        self.responses=queue.Queue();self.sequence=0;self.eof=object()
         def read():
             for line in self.process.stdout:
                 try:self.responses.put(json.loads(line))
                 except ValueError:pass
-            self.responses.put(None)
+            self.responses.put(self.eof)
         threading.Thread(target=read,daemon=True).start()
 
     def call(self, method, params):
@@ -155,10 +179,13 @@ class Upstream:
         while time.monotonic()<end:
             try:response=self.responses.get(timeout=max(.01,end-time.monotonic()))
             except queue.Empty:raise ValueError('Browser tool deadline expired; do not replay uncertain writes') from None
-            if response is None:raise ValueError('Browser MCP disconnected; do not replay uncertain writes')
+            if response is self.eof:raise ValueError('Browser MCP disconnected; do not replay uncertain writes')
+            if not isinstance(response,dict):continue
             if response.get('id')==number:
                 if 'error' in response:raise ValueError('Browser MCP request failed')
-                return response.get('result',{})
+                result=response.get('result')
+                if not isinstance(result,dict):raise ValueError('Invalid browser MCP result')
+                return result
         raise ValueError('Browser MCP deadline expired')
 
     def close(self):
@@ -179,7 +206,7 @@ def main():
             req={}
             try:
                 req=json.loads(line)
-                if not isinstance(req,dict):raise ValueError('JSON-RPC object required')
+                if not isinstance(req,dict) or not isinstance(req.get('method'),str):raise ValueError('JSON-RPC object and method required')
                 result=gate.dispatch(req['method'],req.get('params',{}))
                 response={'jsonrpc':'2.0','id':req.get('id'),'result':result}
             except (ValueError,KeyError,TypeError):

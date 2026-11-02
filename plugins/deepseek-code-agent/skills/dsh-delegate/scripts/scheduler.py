@@ -292,30 +292,46 @@ class Scheduler:
             return 'failed',{'summary':'Execution did not complete: '+str(last.get('status'))}
         try:
             report=json.loads(Path(last['path']).read_text())
+            if not isinstance(report,dict):
+                raise ValueError('Invalid report')
         except (OSError,ValueError,KeyError):
             return 'blocked',{'summary':'Execution report unavailable; inspect before resuming'}
+        if spec.get('legacy'):
+            result={'summary':report.get('final',''),'artifacts':[]}
+            outcome='done'
+        else:
+            p=self.root/task['agent_id']/'mailbox/completion.json'
+            try:
+                result=json.loads(p.read_text())
+                if not isinstance(result,dict):
+                    raise ValueError('Invalid outcome')
+            except (OSError,ValueError):
+                return 'blocked',{'summary':'Missing or invalid complete_task outcome; resume the owner to finish delivery'}
+            if result.get('invocation')!=last['path']:
+                return 'blocked',{'summary':'Completion belongs to an earlier execution'}
+            outcome=result.get('outcome')
+            if outcome not in ('done','blocked','failed'):
+                return 'blocked',{'summary':'Invalid completion outcome'}
+        # Honest blockers/failures retain their explanation and do not require
+        # checks the runner deliberately skipped for incomplete work.
+        if outcome!='done':
+            return outcome,result
         required=spec.get('acceptance',{}).get('commands')
         if required:
-            evidence=report.get('acceptance',{})
+            evidence=report.get('acceptance') or {}
             expected=spec['acceptance']
-            if (not evidence.get('passed') or evidence.get('commands')!=expected['commands']
-                    or evidence.get('fingerprint')!=fingerprint(spec['workspace'],expected['paths'])):
+            try:
+                valid=(isinstance(evidence,dict) and evidence.get('passed')
+                       and evidence.get('commands')==expected['commands']
+                       and evidence.get('fingerprint')==fingerprint(spec['workspace'],expected['paths']))
+            except (OSError,ValueError):
+                valid=False
+            if not valid:
                 return 'failed',{'summary':'Declared acceptance failed or evidence is stale','acceptance':evidence}
-        if spec.get('legacy'):
-            return 'done',{'summary':report.get('final',''),'artifacts':[]}
-        p=self.root/task['agent_id']/'mailbox/completion.json'
-        if not p.is_file():
-            return 'blocked',{'summary':'Missing complete_task outcome; resume this agent to finish its delivery'}
-        result=json.loads(p.read_text())
-        if result.get('invocation')!=last['path']:
-            return 'blocked',{'summary':'Completion belongs to an earlier execution'}
-        outcome=result.get('outcome')
-        if outcome not in ('done','blocked','failed'):
-            return 'blocked',{'summary':'Invalid completion outcome'}
-        if outcome=='done':
+        if not spec.get('legacy'):
             try:
                 result['artifacts']=self.artifacts(task)
-            except ValueError as exc:
+            except (OSError,ValueError) as exc:
                 return 'blocked',{'summary':str(exc)}
         result['acceptance']=report.get('acceptance')
         return outcome,result

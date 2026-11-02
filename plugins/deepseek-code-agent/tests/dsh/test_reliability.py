@@ -88,6 +88,22 @@ class ReliabilityTests(fixtures.SchedulerTests):
         self.assertIn('Tool',stalled(root,state,limits({'tool_timeout_seconds':10}),now=1200))
 
 
+    def test_source_symlink_change_becomes_task_failure_not_scheduler_crash(self):
+        from reliability import fingerprint
+        from worker import save
+        source=self.workspace/'source.py';source.write_text('one')
+        (self.workspace/'other.py').write_text('two')
+        team=self.scheduler.create_team({'tasks':[self.spec('a',acceptance={'criteria':['passes'],'commands':[['true']],'paths':['source.py']})]},start=False)
+        task=self.scheduler.claim_next();root=self.base/'registry'/task['agent_id']
+        report=root/'turns/test.result.json'
+        save(report,{'status':'completed','acceptance':{'passed':True,'commands':[['true']],'fingerprint':fingerprint(self.workspace,['source.py'])}})
+        save(root/'mailbox/completion.json',{'invocation':str(report),'outcome':'done','summary':'done','checks':'passed'})
+        source.unlink();source.symlink_to('other.py')
+        status,result=self.scheduler.completion(task,{'path':str(report),'status':'completed'})
+        self.assertEqual(status,'failed')
+        self.assertIn('stale',result['summary'])
+
+
 # Only run new reliability cases; keep shared setup/helpers without duplicating the old suite.
 for name in dir(fixtures.SchedulerTests):
     if name.startswith('test_') and name not in ReliabilityTests.__dict__:

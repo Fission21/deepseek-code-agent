@@ -73,6 +73,15 @@ class ReliabilityRuntimeTests(fixtures.RuntimeTests):
         self.assertEqual(json.loads((self.work/'a.run.json').read_text())['count'],1)
 
 
+    def test_honest_blocker_is_not_counted_as_failed_acceptance(self):
+        (self.work/'source.py').write_text('source')
+        team=self.create([self.spec('a',fixture={'outcome':'blocked'},acceptance={'criteria':['passes'],'commands':[[sys.executable,'-c','raise SystemExit(2)']],'paths':['source.py']})])
+        result=self.wait(team)['tasks'][0]
+        self.assertEqual(result['status'],'blocked')
+        self.assertEqual(result['result']['summary'],'fixture a')
+        self.assertEqual(result['budget']['failures'],0)
+
+
 for name in dir(fixtures.RuntimeTests):
     if name.startswith('test_') and name not in ReliabilityRuntimeTests.__dict__:
         setattr(ReliabilityRuntimeTests,name,None)

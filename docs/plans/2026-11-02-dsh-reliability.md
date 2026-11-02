@@ -35,3 +35,9 @@ Cancellation races, stale invocation/revision, leaked descendants, secret-bearin
 - Offline regression: 90 Python cases (89 passed, one platform skip) and 129 Node cases (128 passed, one skip). Includes actual fake-worker processes, scheduler death/freeze recovery, no replay, source-bound acceptance, bounded peer delivery and an upstream MCP subprocess.
 - The old overlap test assumed the oldest team always filled both slots; it now checks actual overlap and the global cap while allowing fair cross-team ordering.
 - Real provider/model and live Chrome operations were not used in this upgrade.
+
+## Final independent review
+
+Four important findings were reproduced before fixing: browser input/selector values in request records, unhandled source-fingerprint errors, malformed browser JSON-RPC, and blocked outcomes incorrectly counted as failed acceptance. Each regression now passes. Final local suite: 95 Python cases (94 passed, one platform skip); 129 Node cases (128 passed, one skip).
+
+Scope decisions retained: this gate does not isolate a malicious process running as the same OS user; that requires OS permissions/sandboxing. Pre/post origin checks do not make navigation or action batches atomic; a browser race remains possible, so no stronger permission-isolation guarantee is claimed. No minor findings were deferred.
