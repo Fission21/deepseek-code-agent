@@ -146,19 +146,22 @@ export function createLink(ctx, config, {createUserMessage, defineTool}) {
     ctx.tools.register(defineTool({
       name:'send_peer',
       description:'Send a useful finding to a named teammate in this task group. The scheduler routes it without involving the supervising model. Peers: '+(config.peers||[]).join(', '),
-      parameters:{target:{type:'string',required:true},message:{type:'string',required:true}},output,
+      parameters:{target:{type:'string',required:true},message:{type:'string',required:true},event_type:{type:'string'},correlation_id:{type:'string'}},output,
       async execute(args) {
         if (!(config.peers||[]).includes(args.target) || args.target===config.task_id) throw new Error('Unknown or self recipient');
-        return JSON.stringify({queued:emit('peer',text(args.message),{target:args.target})});
+        const type=args.event_type||'artifact_ready';
+        if (!['question','answer','blocked','artifact_ready'].includes(type)) throw new Error('Unsupported peer event type');
+        if (['question','answer'].includes(type) && !args.correlation_id) throw new Error('Question/answer requires a correlation_id');
+        return JSON.stringify({queued:emit('peer',text(args.message),{target:args.target,event_type:type,correlation_id:args.correlation_id,contract_revision:config.contract_revision||1})});
       }
     }));
     ctx.tools.register(defineTool({
       name:'complete_task',
-      description:'Record the task outcome after owning implementation, relevant checks and repairs. done releases dependents only after this execution finishes; blocked/failed keeps them waiting. This is the task result, not a request for a second review.',
-      parameters:{outcome:{type:'string',required:true},summary:{type:'string',required:true},checks:{type:'string',required:true}},output,
+      description:'Record the task outcome after owning implementation, relevant checks and repairs. done releases dependents only after this execution finishes; blocked/failed keeps them waiting. Include why you chose the implementation and any remaining issues. The parent decides overall delivery; you own repairs.',
+      parameters:{outcome:{type:'string',required:true},summary:{type:'string',required:true},checks:{type:'string',required:true},rationale:{type:'string'},open_issues:{type:'string'}},output,
       async execute(args) {
         if (!['done','blocked','failed'].includes(args.outcome)) throw new Error('Use done, blocked or failed');
-        const result={outcome:args.outcome,summary:text(args.summary),checks:text(args.checks),invocation:config.invocation};
+        const result={outcome:args.outcome,summary:text(args.summary),checks:text(args.checks),rationale:args.rationale?text(args.rationale):'',open_issues:args.open_issues?text(args.open_issues):'',invocation:config.invocation};
         write(path.join(base,'completion.json'),result);
         emit('outcome',result.summary,{outcome:result.outcome});
         return 'Outcome recorded. Finish with a short final response; dependent tasks are released after this turn ends.';

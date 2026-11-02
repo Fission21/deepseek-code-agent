@@ -152,6 +152,12 @@ def snapshot(root, cursor=None):
                 and question.get('status') == 'pending'
                 and not (root / 'mailbox/replies' / path.name).exists()):
             questions.append(question)
+    browser_requests=[]
+    for file in (root/'mailbox/browser').glob('b-*.json'):
+        request=json.loads(file.read_text())
+        if (state.get('active') and request.get('invocation')==state['active'].get('result_file')
+                and not file.with_suffix('.used').exists() and time.time()-request.get('created',0)<600):
+            browser_requests.append(request)
     result = state.get('last_result')
     report = None
     if result and result['turn'] != previous.get('result'):
@@ -181,6 +187,7 @@ def snapshot(root, cursor=None):
         'pending_turns': len(state['queue']),
         'messages': messages,
         'pending_questions': questions,
+        'browser_requests':browser_requests,
         'progress': state.get('last_event'),
         'cursor': base64.urlsafe_b64encode(json.dumps(next_cursor).encode()).decode(),
     }
@@ -190,6 +197,7 @@ def snapshot(root, cursor=None):
             'text': report.get('final', ''),
             'report_file': str(path),
             'elapsed_seconds': report.get('elapsed_seconds'),
+            'acceptance':report.get('acceptance'),
         }
     if state.get('error'):
         output['error'] = state['error']
@@ -235,6 +243,21 @@ class AgentAPI:
             require_supported()
         from scheduler import Scheduler, LIVE, READY
         scheduler = Scheduler(self.root)
+        if method=='review_team':
+            return scheduler.review_team(params['team_id'],params['revisions'],params['summary'])
+        if method=='authorize_browser_action':
+            from browser_gate import grant
+            root=agent_path(self.root,params['agent_id'])
+            with scheduler.db(True) as db:
+                task=db.execute('SELECT * FROM tasks WHERE agent_id=?',(params['agent_id'],)).fetchone()
+                if not task or task['revision']!=params['expected_revision'] or task['status']!='running':
+                    raise ValueError('Stale task revision or inactive browser task')
+                with locked(root) as state:
+                    if not state.get('active'):
+                        raise ValueError('Browser execution is no longer active')
+                    result=grant(root/'mailbox',params['request_id'],state['active']['result_file'],params['reason'])
+                scheduler.emit(db,task['team_id'],task['name'],'browser_authorized',{'request_id':params['request_id']})
+            return result
         if method == 'create_team':
             return scheduler.create_team(params)
         if method == 'set_concurrency':
@@ -253,7 +276,7 @@ class AgentAPI:
             if method=='resume_task':
                 tasks=[t for t in team['tasks'] if t['name']==params['task_id']]
                 if not tasks:raise ValueError('Unknown task in team')
-                return scheduler.resume(tasks[0]['agent_id'],params['message'])
+                return scheduler.resume(tasks[0]['agent_id'],params['message'],expected_revision=params.get('expected_revision'),acknowledge_escalation=params.get('acknowledge_escalation',False),new_limits=params.get('limits'))
             with scheduler.db(True) as db:
                 db.execute('UPDATE teams SET state=? WHERE id=?',('closed' if method=='close_team' else 'paused',params['team_id']))
             scheduler.cancel([t['agent_id'] for t in team['tasks']],close=method=='close_team')
@@ -361,7 +384,7 @@ class AgentAPI:
             until = time.monotonic() + timeout
             while True:
                 result = snapshot(root, cursor)
-                if (result['messages'] or result['pending_questions'] or result.get('result')
+                if (result['messages'] or result['pending_questions'] or result['browser_requests'] or result.get('result')
                         or result['state'] in ('idle', 'paused', 'closed', 'needs_attention')
                         or time.monotonic() >= until):
                     return result

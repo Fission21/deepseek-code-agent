@@ -18,6 +18,15 @@ AGENT_ID = {
     'description': 'ID returned by spawn_agent',
 }
 AGENT = {'agent_id': AGENT_ID}
+LIMITS = {'type':'object','properties':{name:{'type':kind,'exclusiveMinimum':0} for name,kind in (
+    ('max_failures','integer'),('max_elapsed_seconds','number'),('progress_timeout_seconds','number'),
+    ('tool_timeout_seconds','number'),('max_peer_messages','integer'),('max_peer_rounds','integer'))},'additionalProperties':False}
+ACCEPTANCE = {'type':'object','properties':{
+    'criteria':{'type':'array','items':LONG_STRING,'minItems':1},
+    'commands':{'type':'array','items':{'type':'array','items':STRING,'minItems':1},'maxItems':20},
+    'paths':{'type':'array','items':STRING,'description':'Explicit source files/directories covered by the commands; required with commands'}
+},'required':['criteria'],'additionalProperties':False}
+
 CURSOR = {'cursor': {'type': 'string', 'description': 'Last returned cursor; excludes messages and results already delivered'}}
 
 
@@ -43,6 +52,7 @@ TOOLS = [
         'scope_paths': {'type': 'array', 'items': STRING, 'maxItems': 100, 'description': 'Writable paths relative to workspace; omitted means read-only. Assignment boundary, not a security sandbox.'},
         'context_files': {'type': 'array', 'items': STRING, 'maxItems': 30, 'description': 'Optional relevant Markdown/text files; never credentials or private Codex session logs'},
         'required_reads': {'type': 'array', 'items': STRING, 'maxItems': 30, 'description': 'Optional applicable skill or rule files beyond native AGENTS.md'},
+        'acceptance': ACCEPTANCE, 'limits':LIMITS,
         'timeout_seconds': {'type': 'number', 'exclusiveMinimum': 0, 'maximum': 86400, 'default': 600},
         'tab_id': {'type': 'integer', 'minimum': 1, 'description': 'Optional assigned existing Chrome tab; enables huashu MCP and requires url'},
         'url': {'type': 'string', 'pattern': '^https?://', 'description': 'Expected URL for the assigned Chrome tab, without embedded credentials'},
@@ -80,18 +90,24 @@ TASK_SCHEMA = {'type':'object','properties':{
 },'required':['id','task','workspace'],'additionalProperties':False}
 TOOLS += [
     tool('create_team','Start explicitly authorized DSH tasks as a team. Independent tasks run concurrently; dependencies and resource conflicts are scheduled automatically. Default global concurrency is 2. DSH workers own their testing, repairs and complete_task delivery.',
-         {'title':STRING,'max_parallel':{'type':'integer','minimum':1,'maximum':8,'description':'Optional per-team ceiling within the global limit; omitted means inherit global. Choose based on independent work, not difficulty alone.'},'tasks':{'type':'array','items':TASK_SCHEMA,'minItems':1,'maxItems':32}},('tasks',)),
+         {'title':STRING,'contract':dict(LONG_STRING,description='Parent-defined immutable shared interface contract; resolve disputes with parent'),'max_parallel':{'type':'integer','minimum':1,'maximum':8,'description':'Optional per-team ceiling within the global limit; omitted means inherit global. Choose based on independent work, not difficulty alone.'},'tasks':{'type':'array','items':TASK_SCHEMA,'minItems':1,'maxItems':32}},('tasks',)),
     tool('inspect_team','Read team tasks, results, capacity, waiting reasons and new events without waiting. eligible_now describes current constraints, not a reservation or an artifact integrity check.',{**TEAM,'cursor':{'type':'integer','minimum':0}},('team_id',),True),
     tool('wait_team','Wait for changes from any task in this team, without one wait call per worker. Returns progress, peer messages, questions and results.',
          {**TEAM,'cursor':{'type':'integer','minimum':0},'timeout_seconds':{'type':'number','minimum':0,'maximum':55}},('team_id',),True),
     tool('resume_task','Continue a stopped or finished team task in the same DSH session. Give the correction to its existing owner. Revising an upstream task invalidates already executed descendants.',
-         {**TEAM,'task_id':STRING,'message':STRING},('team_id','task_id','message')),
+         {**TEAM,'task_id':STRING,'message':STRING,'expected_revision':{'type':'integer','minimum':1},'acknowledge_escalation':{'type':'boolean'},'limits':LIMITS},('team_id','task_id','message','expected_revision')),
     tool('cancel_team','Pause this team and stop its owned executions. Session history remains available for resume_task.',TEAM,('team_id',)),
     tool('close_team','Finish this team, stop owned executions and retain results. It cannot be resumed.',TEAM,('team_id',)),
     tool('set_concurrency','Set the global DSH execution limit for this shared registry across chats. Reducing it lets running jobs finish and delays new starts.',
          {'limit':{'type':'integer','minimum':1,'maximum':8}},('limit',)),
     tool('set_team_concurrency','Adjust only this team ceiling within the global limit. Null restores inheritance. Lowering it does not stop running tasks. Prefer this to changing capacity for other chats.',
          {**TEAM,'limit':{'type':['integer','null'],'minimum':1,'maximum':8}},('team_id','limit'))
+]
+TOOLS += [
+    tool('review_team','Record the parent delivery decision against current task revisions. Use existing acceptance evidence and review important changes; this does not rerun checks or transfer repairs to the parent.',
+         {**TEAM,'revisions':{'type':'object','additionalProperties':{'type':'integer','minimum':1}},'summary':LONG_STRING},('team_id','revisions','summary')),
+    tool('authorize_browser_action','Grant one exact pending browser action already authorized by the user. Inspect browser_requests first; ordinary replies do not grant actions. Expires in 60 seconds and is consumed before execution.',
+         {**AGENT,'request_id':STRING,'expected_revision':{'type':'integer','minimum':1},'reason':LONG_STRING},('agent_id','request_id','expected_revision','reason')),
 ]
 TOOL_NAMES = {item['name'] for item in TOOLS}
 
@@ -105,7 +121,7 @@ def dispatch(api, request):
         return {
             'protocolVersion': version,
             'capabilities': {'tools': {}},
-            'serverInfo': {'name': 'dsh-agents', 'version': '0.3.0'},
+            'serverInfo': {'name': 'dsh-agents', 'version': '0.4.0'},
             'instructions': (
                 'Use DSH only when the user explicitly requests this collaborating worker. Lead, send corrections and answer '
                 'questions; DSH owns implementation, testing and repairs. No DSH-specific second '

@@ -63,3 +63,5 @@ DSH 加载本 Skill 的 `runtime/controller_link.mjs`，获得：
 底层 `worker.py` 和 `run_dsh.py` 是实现及故障诊断入口，常规任务无需直接管理它们的队列、task 文件或 stop/wait 顺序。空闲时不保留 DSH 工作进程；MCP 服务仅负责工具通信。
 
 本机通过 `dsh-server.mjs` 提供 stdio MCP；注册名称 `dsh_agents`。修改工具注册不会自动让已经开始的聊天重载工具表；当前聊天继续使用 JSON 入口即可。旧 `deepseek_code_agent` 服务仍提供 `ds_*` 接口，但只作为显式 legacy 入口，不应替代 DSH。
+
+`review_team` 记录主对话的交付判断；`authorize_browser_action` 发放已获用户授权的确切动作许可。`resume_task` 传 `expected_revision`，熔断后由主对话明确重新分配预算；详见[可靠协作](reliability.md)。

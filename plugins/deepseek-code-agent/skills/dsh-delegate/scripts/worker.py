@@ -383,7 +383,8 @@ def drain(root):
                                  DSH_DELEGATE_OWNER=owner_token),
                     )
                     state['active'] = {'turn': number, 'runner_pid': proc.pid, 'child_pid': None,
-                                       'owner_token': owner_token, 'result_file': str(result_file)}
+                                       'owner_token': owner_token, 'result_file': str(result_file), 'started_at':time.time()}
+                    state.update(heartbeat_at=time.time(),progress_at=time.time(),tool_started_at=None)
                 # Publish the gate only after the PID/turn record has been committed.
                 with open(gate_file, 'x') as gate:
                     os.chmod(gate_file, 0o600)
@@ -404,6 +405,8 @@ def drain(root):
                 reader = threading.Thread(target=read_output, daemon=True)
                 reader.start()
                 while True:
+                    with locked(root) as state:
+                        state['heartbeat_at']=time.time()
                     try:
                         line = events.get(timeout=.5)
                     except queue.Empty:
@@ -421,6 +424,11 @@ def drain(root):
                         continue
                     with locked(root) as state:
                         state['last_event'] = event
+                        state['progress_at']=time.time()
+                        if event.get('type')=='tool_call' or event.get('phase')=='acceptance':
+                            state['tool_started_at']=state.get('tool_started_at') or time.time()
+                        elif event.get('type') in ('tool_result','acceptance'):
+                            state['tool_started_at']=None
                         active = state.get('active')
                         if (active and active.get('turn') == number
                                 and event.get('status') == 'started'

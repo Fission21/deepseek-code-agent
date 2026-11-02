@@ -1,6 +1,6 @@
 # DeepSeek Code Agent for Codex
 
-Version 0.3.0. This plugin enables local **DeepSeek Harness (DSH)** only when explicitly selected for the current task and keeps the previous OpenCode/Luna controller as an explicit legacy lane.
+Version 0.4.0. This plugin enables local **DeepSeek Harness (DSH)** only when explicitly selected for the current task and keeps the previous OpenCode/Luna controller as an explicit legacy lane.
 
 Full setup, platform status, security notes, and historical benchmark caveats are in the [repository README](../../README.md) ([中文](../../README.zh-CN.md)).
 
@@ -75,7 +75,7 @@ For parallel work, use `create_team`, `inspect_team`, `wait_team`, `resume_task`
 
 ## Browser
 
-The optional chain is DSH → huashu-chrome MCP → shared local bridge → the user's Chrome extension. Pass `tab_id` and `url` to `spawn_agent`; DSH verifies and uses that exact tab on every call. All shared-Chrome tasks are serialized, including different tabs. Login state is not business authorization; do not pay, send, delete, or write data without the exact task authorization.
+The optional chain is DSH → assigned-tab browser gate → huashu-chrome MCP → shared local bridge → the user's Chrome extension. Pass `tab_id` and `url` to `spawn_agent`; DSH verifies and uses that exact tab on every call. All shared-Chrome tasks are serialized, including different tabs. Login state is not business authorization; do not pay, send, delete, or write data without the exact task authorization.
 
 ## Legacy lane
 
@@ -96,3 +96,7 @@ npm run test:node # Node/OpenCode tests only
 ```
 
 The DSH tests use a fake DSH executable and do not call a model. They cover single-agent/team interfaces, concurrency limits, resource exclusion, dependency handoffs, peer messages, scheduler recovery, MCP framing, lifecycle/process cleanup, queue and message boundaries, pending questions, interrupt/timeout resume, context limits, scope traversal, install-relative and special-character paths, and output filtering.
+
+## Reliability
+
+Use task acceptance commands, bounded failure/time budgets, versioned handoffs and parent delivery decisions. The watchdog restores supervision without replay; ready teams rotate within the global hard cap. Browser writes need an exact single-use parent grant. [Parameters and boundaries](skills/dsh-delegate/references/reliability.md).

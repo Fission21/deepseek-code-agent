@@ -2,9 +2,9 @@
 
 English | [简体中文](./README.zh-CN.md)
 
-**v0.3.0 status:** local **DeepSeek Harness (DSH)** is enabled only when the user explicitly selects it for the current task, with concurrent team support. The older OpenCode/Luna lane is still shipped, but only as an explicit legacy choice. Installing this plugin does not silently substitute OpenCode or Luna when the user asks for DSH.
+**v0.4.0 status:** local **DeepSeek Harness (DSH)** is enabled only when the user explicitly selects it for the current task, with concurrent team support. The older OpenCode/Luna lane is still shipped, but only as an explicit legacy choice. Installing this plugin does not silently substitute OpenCode or Luna when the user asks for DSH.
 
-The plugin gives Codex a `dsh_agents` MCP server, a `dsh-delegate` Skill, and the current DSH controller implementation: 16 collaboration operations (eight single-agent and eight team/scheduler operations), persistent sessions, selected-context packets, the `deepseek-official / deepseek-flash` model with `max` reasoning, optional current-Chrome control through huashu-chrome, and the legacy `deepseek_code_agent` MCP with its original `ds_*` tools.
+The plugin gives Codex a `dsh_agents` MCP server, a `dsh-delegate` Skill, and the current DSH controller implementation: 18 collaboration operations, including parent delivery decisions and exact browser action grants, persistent sessions, selected-context packets, the `deepseek-official / deepseek-flash` model with `max` reasoning, optional current-Chrome control through huashu-chrome, and the legacy `deepseek_code_agent` MCP with its original `ds_*` tools.
 
 There is **no claim of fixed token savings** for DSH. DSH is an external, independently persistent session with its own tools and history. Codex sends only the context the parent selects; DSH does not automatically inherit all private Codex tools, sessions, or conversation history. Older benchmark documents in this repository remain historical evidence for their original lanes and setups, not measurements of the current DSH lane.
 
@@ -14,30 +14,35 @@ There is **no claim of fixed token savings** for DSH. DSH is an external, indepe
 flowchart TB
   U["User explicitly selects DSH"] --> P["Codex parent: goals, ownership, concurrency, supervision"]
   P <-->|"Tasks, context, progress, questions, results"| I["dsh_agents MCP / JSON CLI"]
-  I <--> S["Shared scheduler: global default 2; per-team ceilings"]
-  S <--> DB[("SQLite: capacity, task states, revisions, events")]
+  I <--> S["Shared scheduler: hard global cap 2; team occupancy caps; fair rotation"]
+  S <--> DB[("SQLite WAL: states, revisions, structured events, budgets")]
+  W["Watchdog: restores supervision without replay"] --> S
   S --- R["Ready dependencies + exclusive resources; visible waiting reasons"]
   S <-->|"Dispatch, messages, delivery"| EXEC
   subgraph EXEC["DSH: DeepSeek Flash / max; one persistent session per task"]
     subgraph A["Team A: example ceiling 2"]
-      A1["DSH A1: implement, test, repair"] <-->|"Peer messages"| A2["DSH A2: implement, test, repair"]
-      A1 -->|"Versioned handoff"| A3["DSH A3: integrate, test, deliver"]
-      A2 -->|"Versioned handoff"| A3
+      A1["DSH A1: implement, test, repair"] <-->|"Structured events via ledger"| A2["DSH A2: implement, test, repair"]
+      A1 -->|"Version, rationale, checks, open issues"| A3["DSH A3: integrate, test, deliver"]
+      A2 -->|"Version, rationale, checks, open issues"| A3
     end
     subgraph B["Team B: example ceiling 1"]
       B1["DSH B1: independent task"]
     end
   end
   EXEC --> T["Code, files, terminal: assigned task scope"]
-  EXEC --> C["huashu-chrome: current login; shared browser runs serially"]
+  EXEC --> C["Browser gate: assigned tab/origin; read-only default; one-use writes"]
 ```
 
 The parent decides ordinary questions and corrections. A DSH `ask_parent` question is answered with `reply_agent` for that `request_id`; `send_message` is for additional context or a correction. Only a decision genuinely missing from the task goes to the user. DSH owns implementation, tests, fixes, and delivery; the parent reviews the result with the project's normal standards. Do not add a DSH-specific second full verification suite or force the parent to repeat every DSH test.
 
+## Reliability
+
+Tasks carry acceptance criteria and optional argv checks bound to explicit source fingerprints. Workers own repairs; integration owners handle integration failures. Codex decides delivery using existing evidence and proportionate review, without automatically rerunning tests or taking over implementation. A watchdog restores supervision without replay, task budgets stop repeated failures, and ready teams share slots by rotation. Browser calls go through an assigned-tab/origin gate; writes require an exact, expiring, single-use grant. This is a cooperative tool boundary, not an OS sandbox. [Configuration and limits](plugins/deepseek-code-agent/skills/dsh-delegate/references/reliability.md).
+
 ## What is included
 
 - **`dsh_agents`** — explicitly selected DSH MCP server exposing `spawn_agent`, `send_message`, `wait_agent`, `inspect_agent`, `reply_agent`, `interrupt_agent`, `list_agents`, and `close_agent`.
-- **`dsh-delegate`** — explicit-only Skill for single-agent/team collaboration, current-Chrome work, and the same 16-operation contract.
+- **`dsh-delegate`** — explicit-only Skill for single-agent/team collaboration, current-Chrome work, and the same 18-operation contract.
 - **DSH runtime** — `scheduler.py`, `worker.py`, `run_dsh.py`, `agent_api.py`, `context_packet.py`, `mcp_server.py`, the controller link, and `config/max.yml` under `plugins/deepseek-code-agent/skills/dsh-delegate/`.
 - **Legacy lane** — the existing OpenCode controller (`server.mjs`, `ds_*` tools) and legacy Skill remain available for explicit OpenCode/Luna requests. The legacy Skill has implicit invocation disabled.
 - **No bundled credentials** — no API keys, DSH/Codex session records, npm cache, user Chrome profile, cookies, or browser data.
@@ -149,7 +154,7 @@ Team workers use `send_peer` to communicate and `complete_task` to deliver outco
 
 ### Current Chrome (optional)
 
-The browser chain is **DSH → huashu-chrome MCP → local shared bridge → the user's Chrome extension**. huashu-design is a design skill and does not provide this browser channel.
+The browser chain is **DSH → browser_gate.py → huashu-chrome MCP → local shared bridge → the user's Chrome extension**. huashu-design is a design skill and does not provide this browser channel.
 
 Pass an existing `tab_id` and its expected `url` to `spawn_agent`. DSH calls `learnings`, snapshots that exact tab, verifies identity, and passes the tab ID on every browser call. All tasks using the shared Chrome environment are serialized, even when they use different tabs. The parent must not operate that tab during the task.
 

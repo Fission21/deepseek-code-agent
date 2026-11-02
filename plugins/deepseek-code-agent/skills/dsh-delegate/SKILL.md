@@ -9,7 +9,7 @@ description: Use ONLY when the user explicitly requests DSH delegation for the c
 
 按使用 Codex 子代理的方式使用本机 DSH。**主对话负责目标、分工、监督进度和纠偏；DSH 负责实现、测试、修复与完整交付。** 不为 DSH 增加专属的额外核验、重复确认或主对话重跑全部检查的流程。发现问题就把明确反馈交回原代理继续完成，不默认由主对话接手收尾。
 
-默认模型为 `deepseek-official / deepseek-flash`，推理 `max`。启用本 Skill 后，用户明确选择 DSH 时，不要用 OpenCode、Luna 或其他同名 DeepSeek 工具替换。只有用户明确要求 OpenCode 或旧 `ds_*` 工具时才走 [legacy lane](../deepseek-coding-delegation/SKILL.md)。
+默认模型为 `deepseek-official / deepseek-flash`，推理 `max`。启用本 Skill 后，用户明确选择 DSH 时，不要用 OpenCode、Luna 或其他同名 DeepSeek 工具替换。只有用户明确要求 OpenCode 或旧 `ds_*` 工具时才走 [legacy lane](https://github.com/Fission21/deepseek-code-agent/blob/main/plugins/deepseek-code-agent/skills/deepseek-coding-delegation/SKILL.md)。
 
 ## 常用协作
 
@@ -33,9 +33,13 @@ description: Use ONLY when the user explicitly requests DSH delegation for the c
 - 让 DSH 自行选择适当检查、解决失败、清理它创建的专属临时资源，最后说明结果、修改文件、实际检查与剩余阻塞。项目本身适用的要求照常遵守，不因更换执行模型另加一套门槛。
 - 超时、中断或错误会保留会话并暂停，避免自动重复不确定的写入。主对话作方向判断，交回 DSH 处理。
 
+## 可靠性与交付
+
+派发时给出验收标准和必要测试；程序记录证据并限制重试。主对话依据结果决定交付，关键改动按需审阅；不默认重跑检查或接手修复。集成问题由集成负责人定位，再交回责任 Worker。详见[验收、熔断、Watchdog、消息约束和浏览器授权](references/reliability.md)。
+
 ## 当前 Chrome
 
-`spawn_agent` 传入已分配的 `tab_id` 和预期 `url`，即可启用花叔 MCP，使用当前 Chrome 的登录会话。将目标操作及授权范围交给 DSH；它负责交互、结果检查和普通定位问题。当前共享 Chrome 的浏览器任务串行执行，即使分配不同标签页也共用登录状态。真实登录态不等于授权支付、发消息、删除或写业务数据。详见 [浏览器与底层调用](references/execution.md)。
+`spawn_agent` 传入已分配的 `tab_id` 和预期 `url`，即可启用花叔 MCP，使用当前 Chrome 的登录会话。将目标操作及授权范围交给 DSH；它负责交互、结果检查和普通定位问题。当前共享 Chrome 的浏览器任务串行执行，即使分配不同标签页也共用登录状态。工具入口默认只读；确切写操作由主对话根据已有用户授权发放一次许可，不重复向用户请示。真实登录态不等于授权支付、发消息、删除或写业务数据。详见 [浏览器与底层调用](references/execution.md)。
 
 ## 安装与平台
 

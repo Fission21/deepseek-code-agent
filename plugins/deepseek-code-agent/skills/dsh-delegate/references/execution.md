@@ -49,7 +49,7 @@ python3 <plugin-root>/skills/dsh-delegate/scripts/run_dsh.py \
 
 ## 控制当前 Chrome
 
-这条链路是 **DSH → huashu-chrome MCP → 本机共享 bridge → 用户 Chrome 扩展**。huashu-design 是设计技能，不提供该浏览器通道。
+这条链路是 **DSH → browser_gate.py → huashu-chrome MCP → 本机共享 bridge → 用户 Chrome 扩展**。huashu-design 是设计技能，不提供该浏览器通道。
 
 1. 主助手通过可用的 huashu 工具调用站点 `learnings`。首次验证优先使用无业务数据的本机页面。必要时在后台打开本任务独占标签页：`tabs(action="new", url=..., focus=false, label=...)`；保存并向用户报告返回的 tabId。
 2. 核实 URL、账号与任务允许的动作。任务中写清按钮、输入值和期望结果，避免将别的标签页内容提供给 DSH。任务运行期间主助手不操作同一标签页。
@@ -70,3 +70,5 @@ python3 <plugin-root>/skills/dsh-delegate/scripts/run_dsh.py \
 共享同一标签页的浏览器操作串行执行。huashu 的稀疏后台页面可能内部拍第二次快照但返回第一次编号，所以简单表单也可能遇到过期；不要因此关闭快照保护。
 
 `allowSensitive` 只能用于任务已经明确授权的具体动作；连接真实登录态不等于授权支付、发消息、删除或写业务数据。Skill 不授予这些权限。huashu 可能自动生成站点剧本草稿；临时测试草稿先按来源 URL、时间和 ID 核对归属，再清理本次条目；不采纳为通用经验、不覆盖其他条目。共享 bridge 和 Chrome 不属于一次 DSH 调用的清理对象。
+
+当前入口增加了指定 tab/origin 的只读默认值和一次性动作授权。见[可靠协作中的浏览器授权](reliability.md#当前-chrome-的动作授权)；已有授权由主对话直接处理，普通消息不代替工具授权。

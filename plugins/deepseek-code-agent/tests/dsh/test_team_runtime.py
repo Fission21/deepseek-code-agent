@@ -86,8 +86,14 @@ class RuntimeTests(unittest.TestCase):
         two=self.create([self.spec('c',.7)])
         self.assertEqual(self.wait(one)['state'],'done');self.assertEqual(self.wait(two)['state'],'done')
         a,b,c=[json.loads((self.work/(n+'.run.json')).read_text()) for n in 'abc']
-        self.assertLess(max(a['start'],b['start']),min(a['end'],b['end']))
-        self.assertGreaterEqual(c['start'],min(a['end'],b['end']))
+        # Fair dispatch may run c before b; assert actual overlap and global cap.
+        events=sorted([(r['start'],1) for r in (a,b,c)]+[(r['end'],-1) for r in (a,b,c)])
+        live=peak=0
+        for at,delta in events:
+            live+=delta;peak=max(peak,live)
+            self.assertLessEqual(live,2)
+        self.assertEqual(peak,2)
+        self.assertTrue(all(r['count']==1 for r in (a,b,c)))
 
     def test_live_team_limit_changes_preserve_jobs_and_other_teams_progress(self):
         one=self.create([self.spec('a',fixture={'release_file':'release-a'}),

@@ -2,9 +2,9 @@
 
 [English](./README.md) | 简体中文
 
-**v0.3.0 状态：** 本机 **DeepSeek Harness（DSH）** 仅在用户明确指定本次任务时启用，支持并发任务组。旧 OpenCode/Luna 通道仍保留，但只作为显式 legacy 选择；用户明确要求 DSH 时，安装本插件不会静默替换成 OpenCode 或 Luna。
+**v0.4.0 状态：** 本机 **DeepSeek Harness（DSH）** 仅在用户明确指定本次任务时启用，支持并发任务组。旧 OpenCode/Luna 通道仍保留，但只作为显式 legacy 选择；用户明确要求 DSH 时，安装本插件不会静默替换成 OpenCode 或 Luna。
 
-插件提供 `dsh_agents` MCP、`dsh-delegate` Skill 和当前 DSH 控制器实现：16 个协作操作（八个单代理接口与八个团队/调度接口）、持久会话、显式上下文包、`deepseek-official / deepseek-flash` + `max` 推理、可选的当前 Chrome huashu 链路，以及保留的旧 `deepseek_code_agent` MCP 与 `ds_*` 工具。
+插件提供 `dsh_agents` MCP、`dsh-delegate` Skill 和当前 DSH 控制器实现：18 个协作操作（含主对话交付记录与浏览器动作授权）、持久会话、显式上下文包、`deepseek-official / deepseek-flash` + `max` 推理、可选的当前 Chrome huashu 链路，以及保留的旧 `deepseek_code_agent` MCP 与 `ds_*` 工具。
 
 本仓库**不声称 DSH 有固定省 token 收益**。DSH 是外部独立持久会话，有自己的工具和历史；Codex 只发送主对话选择的上下文，不会自动继承 Codex 的全部私有工具、会话或聊天历史。仓库里的历史 benchmark 只属于其原始通道和设置，不是当前 DSH 的实测。
 
@@ -14,30 +14,35 @@
 flowchart TB
   U["用户明确指定 DSH"] --> P["Codex 主对话：目标、分工、并发、监督与纠偏"]
   P <-->|"任务、上下文、进度、问题、结果"| I["dsh_agents MCP / JSON CLI"]
-  I <--> S["共享调度器：全局默认 2 路；各组独立限流"]
-  S <--> DB[("SQLite：额度、任务状态、修订与事件")]
+  I <--> S["共享调度器：全局硬顶默认 2；组内占用上限；跨组轮转"]
+  S <--> DB[("SQLite WAL：状态、修订、结构化事件与预算")]
+  W["Watchdog：监督心跳；恢复调度，不重放任务"] --> S
   S --- R["依赖就绪 + 文件/共享资源互斥；显示等待原因"]
   S <-->|"派发、通信、交付"| EXEC
   subgraph EXEC["DSH：DeepSeek Flash / max；每项任务一个持久会话"]
     subgraph A["任务组 A：示例上限 2"]
-      A1["DSH A1：实现、测试、修复"] <-->|"同组消息"| A2["DSH A2：实现、测试、修复"]
-      A1 -->|"版本化交接"| A3["DSH A3：整合、联调、交付"]
-      A2 -->|"版本化交接"| A3
+      A1["DSH A1：实现、测试、修复"] <-->|"结构化事件，经账本转发"| A2["DSH A2：实现、测试、修复"]
+      A1 -->|"版本、理由、检查、遗留问题"| A3["DSH A3：整合、联调、交付"]
+      A2 -->|"版本、理由、检查、遗留问题"| A3
     end
     subgraph B["任务组 B：示例上限 1"]
       B1["DSH B1：独立任务"]
     end
   end
   EXEC --> T["代码、文件、终端；按任务分配范围"]
-  EXEC --> C["花叔 huashu-chrome：当前登录态；共享浏览器串行"]
+  EXEC --> C["浏览器工具门：指定 tab/origin；默认只读；写入一次许可"]
 ```
 
 普通问题由主对话决定。DSH 通过 `ask_parent` 提出的问题要用 `reply_agent` 回答对应的 `request_id`；`send_message` 用于补充上下文或纠偏。只有任务中确实缺少的用户决定才问用户。DSH 负责实现、测试、修复和交付，主对话按项目正常标准审阅结果，不额外增加 DSH 专属的重复全套验证，也不要求主对话重跑 DSH 的每个测试。
 
+## 可靠协作
+
+验收标准随任务派发；最终命令由 runner 执行并绑定源码指纹。Worker 负责实现和修复，集成负责人处理联调，主对话判断交付并按需审阅关键改动，不默认重跑测试或替 Worker 补代码。默认失败两次或超出执行预算后升级给主对话。完整参数与边界见[可靠协作说明](plugins/deepseek-code-agent/skills/dsh-delegate/references/reliability.md)。
+
 ## 包含内容
 
 - **`dsh_agents`**：显式选择 DSH 后使用，提供 `spawn_agent`、`send_message`、`wait_agent`、`inspect_agent`、`reply_agent`、`interrupt_agent`、`list_agents`、`close_agent`。
-- **`dsh-delegate`**：关闭隐式触发，覆盖 DSH 单代理/团队协作、当前 Chrome 和同一套 16 接口。
+- **`dsh-delegate`**：关闭隐式触发，覆盖 DSH 单代理/团队协作、当前 Chrome 和同一套 18 接口。
 - **DSH 运行时**：`scheduler.py`、`worker.py`、`run_dsh.py`、`agent_api.py`、`context_packet.py`、`mcp_server.py`、controller link 和 `config/max.yml`，位于 `plugins/deepseek-code-agent/skills/dsh-delegate/`。
 - **Legacy 通道**：原 OpenCode 控制器（`server.mjs`、`ds_*`）与旧 Skill 仍可用；旧 Skill 已关闭隐式触发。
 - **不打包凭据**：不含 API key、Codex/DSH 会话记录、npm 缓存、用户 Chrome 配置、cookie 或浏览数据。
@@ -149,7 +154,7 @@ DSH 安装位置特殊时，可在启动 Codex 前配置：
 
 ### 当前 Chrome（可选）
 
-链路是 **DSH → huashu-chrome MCP → 本机共享 bridge → 用户 Chrome 扩展**。huashu-design 是设计技能，不提供该浏览器通道。
+链路是 **DSH → browser_gate.py → huashu-chrome MCP → 本机共享 bridge → 用户 Chrome 扩展**。huashu-design 是设计技能，不提供该浏览器通道。
 
 `spawn_agent` 传入已分配的 `tab_id` 和预期 `url`。DSH 先 `learnings`，再 snapshot 该标签并核实身份，每次浏览器调用都带这个 tab ID。共享 Chrome 的浏览器任务串行执行，即使使用不同标签页；任务期间主对话不要操作该标签。
 

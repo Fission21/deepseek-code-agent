@@ -18,6 +18,7 @@ import uuid
 
 from context_packet import write_scope
 from paths import require_supported
+from reliability import acceptance, limits, fingerprint, stalled
 from worker import save, read_state, locked, launch, recover_orphan
 
 HERE = Path(__file__).resolve().parent
@@ -43,6 +44,7 @@ class Scheduler:
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.db_path = self.root / 'scheduler.sqlite3'
         with self.db() as db:
+            db.execute('PRAGMA journal_mode=WAL')
             db.executescript('''
                 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value INTEGER);
                 INSERT OR IGNORE INTO settings VALUES ('concurrency',2),('daemon_pid',0);
@@ -56,6 +58,9 @@ class Scheduler:
                 CREATE TABLE IF NOT EXISTS events (
                     seq INTEGER PRIMARY KEY AUTOINCREMENT,team_id TEXT,task_id TEXT,
                     kind TEXT,data TEXT,created REAL);
+                CREATE TABLE IF NOT EXISTS task_health (agent_id TEXT PRIMARY KEY, failures INTEGER DEFAULT 0, elapsed REAL DEFAULT 0);
+                CREATE TABLE IF NOT EXISTS dispatch_order (team_id TEXT PRIMARY KEY, served REAL);
+                CREATE TABLE IF NOT EXISTS reviews (team_id TEXT PRIMARY KEY, data TEXT);
                 CREATE TABLE IF NOT EXISTS receipts (agent_id TEXT,message_id TEXT,
                     PRIMARY KEY(agent_id,message_id));
             ''')
@@ -114,6 +119,8 @@ class Scheduler:
             if not (path.parent/'team.json').exists() and read_state(path.parent).get('active'):
                 self.adopt_agent(path.parent.name)
         specs = params['tasks']
+        if not isinstance(params.get('contract', ''), str) or len(params.get('contract', '')) > 12000:
+            raise ValueError('Contract must contain at most 12000 characters')
         if not isinstance(specs, list) or not 1 <= len(specs) <= 32:
             raise ValueError('A team requires 1–32 tasks')
         names = [s['id'] for s in specs]
@@ -128,6 +135,8 @@ class Scheduler:
                 raise ValueError('Workspace must be an existing absolute directory')
             workspace = workspace.resolve()
             s = dict(s, workspace=str(workspace))
+            s['limits'] = limits(s.get('limits'))
+            s['acceptance'] = acceptance(s.get('acceptance'), s['task'], workspace)
             graph[s['id']] = s.get('depends_on', [])
             if not isinstance(graph[s['id']], list) or any(n not in names for n in graph[s['id']]):
                 raise ValueError('Dependency must name a task in this team')
@@ -171,11 +180,13 @@ class Scheduler:
                                'Send useful findings directly with send_peer; routine choices are yours. '
                                'Finish with complete_task(outcome=done|blocked|failed, summary, checks). '
                                'Do not report done while work or required checks remain. '
-                               'The result automatically releases dependent tasks; no extra parent verification is required.')
+                               'The result releases dependents after the declared acceptance commands pass. '
+                               'You own repairs; the parent decides delivery without repeating valid checks.')
                 api._raw_call('spawn_agent', dict(s, task=prompt, _agent_id=aid, _defer=True))
                 prepared.append(task_root)
                 save(task_root / 'team.json', {'team_id':team,'task_id':s['id'],'peers':names,
-                                             'require_completion':not legacy})
+                                             'require_completion':not legacy, 'acceptance':s['acceptance'],
+                                             'limits':s['limits'], 'contract':params.get('contract',''), 'contract_revision':1})
                 dependency_file = task_root / 'dependencies.txt'
                 dependency_file.write_text('No completed dependency inputs yet.\n')
                 os.chmod(dependency_file, 0o600)
@@ -226,7 +237,7 @@ class Scheduler:
                 missing.append({'task_id':name, 'status':dep['status']})
             else:
                 result = json.loads(dep['result'] or '{}')
-                inputs.append(dict(task_id=name, revision=dep['revision'], summary=result.get('summary',''), artifacts=result.get('artifacts',[])))
+                inputs.append(dict(task_id=name, revision=dep['revision'], summary=result.get('summary',''), rationale=result.get('rationale',''), checks=result.get('checks',''), open_issues=result.get('open_issues',''), acceptance=result.get('acceptance'), artifacts=result.get('artifacts',[])))
         return inputs, missing
 
     def claim_next(self):
@@ -236,7 +247,7 @@ class Scheduler:
             if len(running) >= limit:
                 return None
             team_limits = dict(db.execute('SELECT team_id,max_parallel FROM team_limits'))
-            rows = db.execute("SELECT t.* FROM tasks t JOIN teams g ON g.id=t.team_id WHERE g.state='active' AND t.status IN ('queued','blocked_dependency') ORDER BY g.created,t.rowid").fetchall()
+            rows = db.execute("SELECT t.* FROM tasks t JOIN teams g ON g.id=t.team_id LEFT JOIN dispatch_order d ON d.team_id=g.id WHERE g.state='active' AND t.status IN ('queued','blocked_dependency') ORDER BY COALESCE(d.served,0),g.created,t.rowid").fetchall()
             for raw in rows:
                 t = dict(raw)
                 if sum(r['team_id']==t['team_id'] for r in running) >= team_limits.get(t['team_id'], limit):
@@ -248,6 +259,10 @@ class Scheduler:
                     continue
                 stale = any(not Path(a['path']).is_file() or hashlib.sha256(Path(a['path']).read_bytes()).hexdigest()!=a['sha256']
                             for item in inputs for a in item['artifacts'])
+                for item in inputs:
+                    producer=db.execute('SELECT * FROM tasks WHERE team_id=? AND name=?',(t['team_id'],item['task_id'])).fetchone()
+                    if not self.delivery_current(producer,json.loads(producer['result'] or '{}')):
+                        stale=True
                 if stale:
                     db.execute("UPDATE tasks SET status='blocked_version',error=? WHERE agent_id=?",('Dependency artifact changed after delivery',t['agent_id']))
                     self.emit(db,t['team_id'],t['name'],'blocked_version',{})
@@ -256,7 +271,8 @@ class Scheduler:
                 if any(self.conflict(t,r) for r in running):
                     continue
                 db.execute("UPDATE tasks SET status='running',attempt=attempt+1,started=?,inputs=?,error=NULL WHERE agent_id=?",(time.time(),t['inputs'],t['agent_id']))
-                t.update(status='running',attempt=t['attempt']+1)
+                t.update(status='running',attempt=t['attempt']+1,started=time.time())
+                db.execute('INSERT OR REPLACE INTO dispatch_order VALUES (?,?)',(t['team_id'],time.time()))
                 self.emit(db,t['team_id'],t['name'],'running',{'attempt':t['attempt'],'inputs':inputs})
                 return t
         return None
@@ -274,8 +290,18 @@ class Scheduler:
         spec=json.loads(task['spec'])
         if last.get('status')!='completed':
             return 'failed',{'summary':'Execution did not complete: '+str(last.get('status'))}
-        if spec.get('legacy'):
+        try:
             report=json.loads(Path(last['path']).read_text())
+        except (OSError,ValueError,KeyError):
+            return 'blocked',{'summary':'Execution report unavailable; inspect before resuming'}
+        required=spec.get('acceptance',{}).get('commands')
+        if required:
+            evidence=report.get('acceptance',{})
+            expected=spec['acceptance']
+            if (not evidence.get('passed') or evidence.get('commands')!=expected['commands']
+                    or evidence.get('fingerprint')!=fingerprint(spec['workspace'],expected['paths'])):
+                return 'failed',{'summary':'Declared acceptance failed or evidence is stale','acceptance':evidence}
+        if spec.get('legacy'):
             return 'done',{'summary':report.get('final',''),'artifacts':[]}
         p=self.root/task['agent_id']/'mailbox/completion.json'
         if not p.is_file():
@@ -291,6 +317,7 @@ class Scheduler:
                 result['artifacts']=self.artifacts(task)
             except ValueError as exc:
                 return 'blocked',{'summary':str(exc)}
+        result['acceptance']=report.get('acceptance')
         return outcome,result
 
     def finish(self, task, status, result):
@@ -306,6 +333,14 @@ class Scheduler:
                         return False
             if current['status']=='cancelling':
                 status=current['cancel_to'] or 'cancelled'
+            health=db.execute('SELECT failures,elapsed FROM task_health WHERE agent_id=?',(task['agent_id'],)).fetchone()
+            failures=(health[0] if health else 0)+(1 if status=='failed' else 0)
+            elapsed=(health[1] if health else 0)+max(0,time.time()-(current['started'] or time.time()))
+            policy=limits(json.loads(current['spec']).get('limits'))
+            db.execute('INSERT OR REPLACE INTO task_health VALUES (?,?,?)',(task['agent_id'],failures,elapsed))
+            if status=='failed' and (failures>=policy['max_failures'] or elapsed>=policy['max_elapsed_seconds']):
+                status='escalated'
+                result=dict(result,escalation='Execution budget exhausted; parent must acknowledge before resuming')
             db.execute('UPDATE tasks SET status=?,result=?,error=?,cancel_to=NULL WHERE agent_id=?',
                        (status,json.dumps(result,ensure_ascii=False),None if status=='done' else result.get('summary'),task['agent_id']))
             self.emit(db,task['team_id'],task['name'],status,result)
@@ -361,18 +396,24 @@ class Scheduler:
                 return
             kind=message.get('kind','progress')
             if kind=='peer':
+                policy=limits(json.loads(task['spec']).get('limits'))
+                prior=[json.loads(r[0]) for r in db.execute("SELECT data FROM events WHERE team_id=? AND task_id=? AND kind='peer'",(task['team_id'],task['name']))]
+                event_type=message.get('event_type','artifact_ready')
+                correlation=message.get('correlation_id')
+                rounds=sum(m.get('correlation_id')==correlation and m.get('event_type')=='question' for m in prior) if correlation else 0
+                rejected=(len(prior)>=policy['max_peer_messages'] or event_type not in ('question','answer','blocked','artifact_ready')
+                          or (event_type in ('question','answer') and not correlation)
+                          or (event_type=='question' and rounds>=policy['max_peer_rounds'])
+                          or message.get('contract_revision',1)!=1)
                 target=db.execute('SELECT * FROM tasks WHERE team_id=? AND name=?',(task['team_id'],message.get('target'))).fetchone()
-                if not target or target['status'] not in LIVE+READY:
+                if rejected or not target or target['status'] not in LIVE+READY:
                     kind='peer_rejected'
-                    mid='rejected-'+hashlib.sha256(message['id'].encode()).hexdigest()
-                    mailbox=self.root/task['agent_id']/'mailbox'
-                    if not (mailbox/'inbox'/(mid+'.json')).exists() and not (mailbox/'delivered'/(mid+'.json')).exists():
-                        save(mailbox/'inbox'/(mid+'.json'),{'id':mid,'message':'Peer message was not delivered: recipient is outside this team or no longer active. Do not assume receipt. '+str(message.get('target'))})
+                    message=dict(message,reason='Peer budget, contract, correlation or recipient rejected; ask parent to arbitrate')
                 else:
                     mid='peer-'+hashlib.sha256((task['agent_id']+message['id']).encode()).hexdigest()
                     mailbox=self.root/target['agent_id']/'mailbox'
                     if not (mailbox/'delivered'/(mid+'.json')).exists() and not (mailbox/'inbox'/(mid+'.json')).exists():
-                        save(mailbox/'inbox'/(mid+'.json'),{'id':mid,'source':'peer','sender':task['name'],'message':message['message']})
+                        save(mailbox/'inbox'/(mid+'.json'),{'id':mid,'source':'peer','sender':task['name'],'event_type':event_type,'correlation_id':correlation,'contract_revision':1,'message':message['message']})
                     message=dict(message,delivery='queued_for_model_boundary')
             self.emit(db,task['team_id'],task['name'],kind,message)
             db.execute('INSERT INTO receipts VALUES (?,?)',(task['agent_id'],message['id']))
@@ -384,6 +425,9 @@ class Scheduler:
             root=self.root/t['agent_id']
             for p in sorted((root/'mailbox/outbox').glob('*.json')):
                 self.ingest(t,json.loads(p.read_text()))
+            for request in sorted((root/'mailbox/browser').glob('b-*.json')):
+                data=json.loads(request.read_text())
+                self.ingest(t,dict(data,kind='browser_request',message='Browser action awaits parent authorization'))
             if t['status'] not in LIVE:
                 continue
             state=read_state(root)
@@ -392,6 +436,14 @@ class Scheduler:
                 recover_orphan(root)
                 state=read_state(root)
                 if state['active']:
+                    policy=limits(json.loads(t['spec']).get('limits'))
+                    reason=stalled(root,state,policy)
+                    with self.db() as db:
+                        health=db.execute('SELECT elapsed FROM task_health WHERE agent_id=?',(t['agent_id'],)).fetchone()
+                    if (health[0] if health else 0)+time.time()-(t['started'] or time.time())>=policy['max_elapsed_seconds']:
+                        reason='Total execution time budget exhausted'
+                    if reason:
+                        self.escalate(t,reason)
                     continue
             if state['state']=='running':
                 self.recover_quiescing_worker(root)
@@ -413,6 +465,17 @@ class Scheduler:
             self.start_worker(t)
         with self.db() as db:
             return bool(db.execute("SELECT 1 FROM tasks WHERE status IN ('running','cancelling','queued') LIMIT 1").fetchone())
+
+    def escalate(self, task, reason):
+        from agent_api import AgentAPI
+        with self.db(True) as db:
+            current=db.execute('SELECT status,attempt FROM tasks WHERE agent_id=?',(task['agent_id'],)).fetchone()
+            if not current or current['status']!='running' or current['attempt']!=task['attempt']:
+                return
+            db.execute("UPDATE tasks SET status='cancelling',cancel_to='escalated' WHERE agent_id=?",(task['agent_id'],))
+            self.emit(db,task['team_id'],task['name'],'watchdog',{'reason':reason})
+        AgentAPI(self.root)._raw_call('interrupt_agent',{'agent_id':task['agent_id']})
+        self.finish(task,'escalated',{'summary':reason,'requires_parent':True})
 
     def start_worker(self, task):
         root=self.root/task['agent_id']
@@ -441,6 +504,8 @@ class Scheduler:
             for r in rows:
                 item={k:r[k] for k in ('name','agent_id','status','revision','attempt','error')}
                 item['result']=json.loads(r['result']) if r['result'] else None
+                health=db.execute('SELECT failures,elapsed FROM task_health WHERE agent_id=?',(r['agent_id'],)).fetchone()
+                item['budget']={'failures':health[0] if health else 0,'elapsed_seconds':health[1] if health else 0,'limits':limits(json.loads(r['spec']).get('limits'))}
                 reasons=[]
                 if r['status'] in LIVE+('queued',):
                     active=True
@@ -470,14 +535,16 @@ class Scheduler:
                 tasks.append(item)
             events=[dict(r) for r in db.execute('SELECT seq,task_id,kind,data,created FROM events WHERE team_id=? AND seq>? ORDER BY seq LIMIT 200',(team,cursor))]
             for e in events:e['data']=json.loads(e['data'])
+            review=db.execute('SELECT data FROM reviews WHERE team_id=?',(team,)).fetchone()
+            review=json.loads(review[0]) if review else {'status':'pending'}
         state=g['state'] if g['state']!='active' else ('running' if active else ('done' if all(t['status']=='done' for t in tasks) else 'needs_attention'))
         capacity={'global_limit':limit,'team_limit':team_limit,'effective_limit':effective,
                   'global_running':len(running),'team_running':team_running,'available_slots':available,
                   'dependency_ready':dependency_ready,'resource_ready':resource_ready}
         return {'team_id':team,'state':state,'concurrency':limit,'capacity':capacity,
-                'tasks':tasks,'events':events,'cursor':events[-1]['seq'] if events else cursor}
+                'review':review,'tasks':tasks,'events':events,'cursor':events[-1]['seq'] if events else cursor}
 
-    def resume(self, agent_id, message):
+    def resume(self, agent_id, message, expected_revision=None, acknowledge_escalation=False, new_limits=None):
         from agent_api import AgentAPI, bounded
         bounded(message); stop=[]
         with self.db(True) as db:
@@ -485,6 +552,19 @@ class Scheduler:
             if not row:
                 raise ValueError('Unknown managed agent')
             t=dict(row)
+            if expected_revision is not None and t['revision'] != expected_revision:
+                raise ValueError('Stale task revision; read current state before writing')
+            spec=json.loads(t['spec']); policy=limits(spec.get('limits'))
+            health=db.execute('SELECT failures,elapsed FROM task_health WHERE agent_id=?',(agent_id,)).fetchone()
+            exhausted=health and (health[0]>=policy['max_failures'] or health[1]>=policy['max_elapsed_seconds'])
+            if (t['status']=='escalated' or exhausted) and not acknowledge_escalation:
+                raise ValueError('Task circuit is open; parent acknowledgement and revised allocation required')
+            if acknowledge_escalation:
+                db.execute('DELETE FROM task_health WHERE agent_id=?',(agent_id,))
+            if new_limits is not None:
+                spec['limits']=limits(dict(policy,**new_limits))
+                db.execute('UPDATE tasks SET spec=? WHERE agent_id=?',(json.dumps(spec),agent_id))
+            db.execute('DELETE FROM reviews WHERE team_id=?',(t['team_id'],))
             if db.execute('SELECT state FROM teams WHERE id=?',(t['team_id'],)).fetchone()[0]=='closed':
                 raise ValueError('Team is closed')
             if t['status'] in LIVE:
@@ -506,14 +586,51 @@ class Scheduler:
             with locked(root) as state:
                 if state['active'] or state['closed']:
                     raise ValueError('Agent still stopping or closed')
-                state['queue']=[]
-            AgentAPI(self.root).task_command('send',root,message,('--defer',))
+                state['queue']=[{'id':state['next_id'],'text':message,'context_files':[]}]
+                state['next_id']+=1
+                state.update(paused=False,error=None,state='queued')
+            meta=json.loads((root/'team.json').read_text()) if (root/'team.json').exists() else {}
+            meta['limits']=spec.get('limits',policy)
+            save(root/'team.json',meta)
             db.execute("UPDATE tasks SET status='queued',revision=revision+1,result=NULL,error=NULL WHERE agent_id=?",(agent_id,))
             db.execute("UPDATE teams SET state='active' WHERE id=?",(t['team_id'],))
             self.emit(db,t['team_id'],t['name'],'revised',{})
         for aid in stop:AgentAPI(self.root)._raw_call('interrupt_agent',{'agent_id':aid})
         self.kick()
         return {'agent_id':agent_id,'delivery':'queued_same_session'}
+
+    def delivery_current(self, task, result):
+        spec=json.loads(task['spec'])
+        required=spec.get('acceptance',{})
+        if required.get('commands'):
+            evidence=result.get('acceptance') or {}
+            try:
+                return bool(evidence.get('passed') and evidence.get('fingerprint')==fingerprint(spec['workspace'],required['paths']))
+            except (OSError,ValueError):
+                return False
+        return True
+
+    def review_team(self, team, revisions, summary):
+        from agent_api import bounded
+        bounded(summary)
+        with self.db(True) as db:
+            rows=[dict(r) for r in db.execute('SELECT * FROM tasks WHERE team_id=?',(team,))]
+            if not rows or any(t['status']!='done' for t in rows):
+                raise ValueError('Only a completed team can be delivered')
+            if revisions!={t['name']:t['revision'] for t in rows}:
+                raise ValueError('Stale task revisions')
+            for t in rows:
+                result=json.loads(t['result'] or '{}')
+                if not self.delivery_current(t,result):
+                    raise ValueError('Tested source has changed; return the task to its owner')
+                for artifact in result.get('artifacts',[]):
+                    p=Path(artifact['path'])
+                    if not p.is_file() or hashlib.sha256(p.read_bytes()).hexdigest()!=artifact['sha256']:
+                        raise ValueError('Delivered artifact has changed')
+            review={'status':'accepted','revisions':revisions,'summary':summary}
+            db.execute('INSERT OR REPLACE INTO reviews VALUES (?,?)',(team,json.dumps(review)))
+            self.emit(db,team,None,'parent_delivery',review)
+        return review
 
     def cancel(self, agent_ids, close=False):
         from agent_api import AgentAPI
@@ -568,9 +685,11 @@ class Scheduler:
         return {'concurrency':limit,'scope':'shared registry across all teams and chats'}
 
     def kick(self):
+        from watchdog import ensure_watchdog
         with self.db(True) as db:
             if not db.execute("SELECT 1 FROM tasks WHERE status IN ('queued','running','cancelling') LIMIT 1").fetchone():return
             pid=db.execute("SELECT value FROM settings WHERE key='daemon_pid'").fetchone()[0]
+            ensure_watchdog(self.root)
             if process_alive(pid,self.root):return
             p=subprocess.Popen([sys.executable,str(HERE/'scheduler.py'),'--root',str(self.root)],stdin=subprocess.DEVNULL,
                                stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True,
@@ -583,6 +702,7 @@ class Scheduler:
             fcntl.flock(lock,fcntl.LOCK_EX)
             try:
                 while True:
+                    save(self.root/'scheduler-heartbeat.json',{'pid':os.getpid(),'at':time.time()})
                     busy=self.tick()
                     if not busy:
                         with self.db(True) as db:

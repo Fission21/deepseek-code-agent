@@ -42,3 +42,18 @@ test('peer routing rejects unknown and self recipients',async t=>{
   await tools.send_peer.execute({target:'b',message:'finding'});
   assert.equal(fs.readdirSync(path.join(root,'outbox')).length,1);
 });
+
+test('handoff preserves rationale and open issues',async t=>{
+  const {root,tools}=fixture(t);
+  await tools.complete_task.execute({outcome:'done',summary:'implemented',checks:'unit passed',rationale:'stable API',open_issues:'integration remains'});
+  const result=JSON.parse(fs.readFileSync(path.join(root,'completion.json')));
+  assert.equal(result.rationale,'stable API');assert.equal(result.open_issues,'integration remains');
+});
+
+test('peer events carry type and correlation and reject unsupported types',async t=>{
+  const {root,tools}=fixture(t);
+  await tools.send_peer.execute({target:'b',message:'Which field?',event_type:'question',correlation_id:'interface-1'});
+  const item=JSON.parse(fs.readFileSync(path.join(root,'outbox',fs.readdirSync(path.join(root,'outbox'))[0])));
+  assert.equal(item.event_type,'question');assert.equal(item.correlation_id,'interface-1');
+  await assert.rejects(()=>tools.send_peer.execute({target:'b',message:'change plan',event_type:'command'}));
+});

@@ -13,8 +13,8 @@ const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
 const mcp = JSON.parse(readFileSync(path.join(root, ".mcp.json"), "utf8"));
 
 test("plugin provides explicit-only DSH and a separate legacy server", () => {
-  assert.equal(plugin.version, "0.3.0");
-  assert.equal(pkg.version, "0.3.0");
+  assert.equal(plugin.version, "0.4.0");
+  assert.equal(pkg.version, "0.4.0");
   assert.match(plugin.description, /Explicit-only local DeepSeek Harness \(DSH\)/);
   assert.deepEqual(Object.keys(mcp.mcpServers), ["dsh_agents", "deepseek_code_agent"]);
   assert.equal(mcp.mcpServers.dsh_agents.args[0], "./dsh-server.mjs");
@@ -79,7 +79,7 @@ test("the default dsh_agents MCP launcher answers initialize and tools/list", as
     const initialized = await waitFor((line) => line.id === 1);
     assert.equal(initialized.result.serverInfo.name, "dsh-agents");
     const listed = await waitFor((line) => line.id === 2);
-    assert.equal(listed.result.tools.length, 16);
+    assert.equal(listed.result.tools.length, 18);
   } finally {
     reader.close();
     if (child.exitCode === null && child.signalCode === null) {
