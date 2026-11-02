@@ -1,0 +1,18 @@
+- id: agent-default-model
+  config:
+    provider: deepseek-official
+    model: deepseek-flash
+    reasoningEffort: max
+- id: approval
+  config:
+    policy: never
+- id: sandbox-policy
+  config:
+    mode: workspace-write
+- id: permission
+  config:
+    defaultPreset: codex-delegate
+    presets:
+      codex-delegate:
+        sandbox: workspace-write
+        approval: never

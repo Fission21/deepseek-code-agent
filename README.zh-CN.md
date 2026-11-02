@@ -2,215 +2,196 @@
 
 [English](./README.md) | 简体中文
 
-**证据状态：** 这是可选的委派实验工具，尚未证明能稳定减少主控 Token。紧密关联的读取分析与诊断默认由 Codex 直接完成。一次读取型对照观察到 Queen Token 少 5.25%，但耗时增加 62.01%，质量和实验干扰因素仍有局限，详见[实测结果与限制](./docs/reading-delegation-retest-2026-09-15.md)。桥接回传变短是独立的传输优化，不等于 Token 节省。
+**v0.2.0 状态：** 本机 **DeepSeek Harness（DSH）** 是默认外部执行者。旧 OpenCode/Luna 通道仍保留，但只作为显式 legacy 选择；用户明确要求 DSH 时，安装本插件不会静默替换成 OpenCode 或 Luna。
 
-支持把范围明确的编码工作交给 Codex 原生 GPT-5.6 Luna 子 Agent，也支持通过 OpenCode Go 使用 DeepSeek、GLM，或通过 OpenCode 执行器直连 DeepSeek 官方 API。Codex 始终保持主控、审核和最终决定权。
+插件提供 `dsh_agents` MCP、`dsh-delegate` Skill 和当前 DSH 控制器实现：八个协作操作、持久会话、显式上下文包、`deepseek-official / deepseek-flash` + `max` 推理、可选的当前 Chrome huashu 链路，以及保留的旧 `deepseek_code_agent` MCP 与 `ds_*` 工具。
 
-随插件提供的 Skill 会在 Codex 直接处理、原生 Luna 子 Agent 和插件的持久 OpenCode Worker 之间选择。插件为 OpenCode 通道提供持久会话、信箱式纠正、状态等待、上下文 fork、权限请求处理、隔离 Git worktree、diff 检查和定向仓库规则清单。
+本仓库**不声称 DSH 有固定省 token 收益**。DSH 是外部独立持久会话，有自己的工具和历史；Codex 只发送主对话选择的上下文，不会自动继承 Codex 的全部私有工具、会话或聊天历史。仓库里的历史 benchmark 只属于其原始通道和设置，不是当前 DSH 的实测。
 
-## 在 Codex 中一句话安装
+## 合作方式
 
-把下面这句话粘贴到一个新的本地 Codex 任务中：
+```mermaid
+flowchart TD
+  U[用户目标] --> P[Codex 主对话：范围、授权、验收]
+  P --> S[spawn_agent：本机 DSH]
+  S --> W[DSH：在持久会话中实施、测试、修复、交付]
+  W --> Q{wait_agent：进度、提问或结果？}
+  Q -->|进度| P
+  Q -->|DSH 的普通阻塞问题| P
+  P -->|reply_agent：回答对应 request_id| W
+  P -->|send_message：纠偏或补充上下文| W
+  Q -->|仅缺少用户决定| H[询问用户]
+  H --> A[reply_agent：回答继续原执行]
+  A --> W
+  Q -->|结果或失败| V[主对话审阅实际改动与检查]
+  V --> C[DSH 清理本任务创建的资源]
+  C --> X[close_agent]
+  X --> D[交付]
+```
 
-> 请访问 <https://github.com/Fission21/deepseek-code-agent>，阅读 README，按当前操作系统安装这个插件并运行前置检查；不要要求我把任何密钥粘贴到聊天中。
+普通问题由主对话决定。DSH 通过 `ask_parent` 提出的问题要用 `reply_agent` 回答对应的 `request_id`；`send_message` 用于补充上下文或纠偏。只有任务中确实缺少的用户决定才问用户。DSH 负责实现、测试、修复和交付，主对话按项目正常标准审阅结果，不额外增加 DSH 专属的重复全套验证，也不要求主对话重跑 DSH 的每个测试。
 
-Codex 会根据下面的系统说明准备依赖并安装 Git marketplace。如果当前权限模式要求审批，请在执行前检查它准备运行的本地命令。
+## 包含内容
 
-## 直接安装
+- **`dsh_agents`**：默认 MCP，提供 `spawn_agent`、`send_message`、`wait_agent`、`inspect_agent`、`reply_agent`、`interrupt_agent`、`list_agents`、`close_agent`。
+- **`dsh-delegate`**：默认 Skill，覆盖 DSH 协作、当前 Chrome 和同一套八接口。
+- **DSH 运行时**：`worker.py`、`run_dsh.py`、`agent_api.py`、`context_packet.py`、`mcp_server.py`、controller link 和 `config/max.yml`，位于 `plugins/deepseek-code-agent/skills/dsh-delegate/`。
+- **Legacy 通道**：原 OpenCode 控制器（`server.mjs`、`ds_*`）与旧 Skill 仍可用；旧 Skill 已关闭隐式触发。
+- **不打包凭据**：不含 API key、Codex/DSH 会话记录、npm 缓存、用户 Chrome 配置、cookie 或浏览数据。
 
-以下 Codex 命令在 Windows、macOS 和 Linux 上相同：
+## 依赖与平台状态
+
+| 依赖 | 说明 |
+|---|---|
+| 支持插件的 Codex | 安装后新开任务，让 MCP 工具和 Skill 加载。 |
+| Git | 仓库工作流及旧 worktree 通道需要。 |
+| Node.js 18+ | 插件启动器和 MCP transport 使用。 |
+| Python 3.9+ | 内置 DSH 控制器使用；可用 `DSH_PYTHON` 指定解释器。 |
+| DeepSeek Harness | 需单独安装；默认 `deepseek-official / deepseek-flash`，推理 `max`。 |
+| huashu-chrome 1.3.0（可选） | 仅当前 Chrome 浏览器任务需要，不自动安装。 |
+
+平台状态明确如下：
+
+- **macOS**：当前真实使用平台；已知配置为 DSH `0.2.0-rc.2` 和 huashu-chrome `1.3.0`。本次交付新增的自动化验收仅为离线 fake DSH，未新增真实 provider/模型或 Chrome live smoke 验收。
+- **Linux**：仅做离线/CI 测试；**未做真实 DSH 模型调用或 Chrome 链路验收**，首次使用前请自行做最小验证。
+- **Windows**：DSH 执行暂不支持；预检返回结构化 `unsupported_platform`，不冒充跨平台已通过。旧 OpenCode 通道可在该主机单独使用（若其自身可用）。
+
+## 安装
 
 ```text
 codex plugin marketplace add Fission21/deepseek-code-agent --ref main
 codex plugin add deepseek-code-agent@deepseek-code-agent
 ```
 
-安装完成后新建 Codex 任务，新的任务才会加载 MCP 工具和 Skill。
+安装后新开一个 Codex 任务，然后运行离线预检（不启动 DSH 模型会话、不调用模型；可能执行 `dsh --version`）：
 
-## 运行要求
+```bash
+node <plugin-root>/dsh-server.mjs --check
+# 在本仓库中：
+npm --prefix plugins/deepseek-code-agent run check
+```
 
-- 支持插件的本地 Codex 桌面应用或 Codex CLI
-- Git
-- Node.js 18 或更高版本
-- DeepSeek/GLM 通道需要当前版本的 OpenCode（已用 1.18.30 验证）
-- 使用该通道时，Go 模型需要 OpenCode Go 权限；官方模型需要单独的 DeepSeek API 凭据
+预检会解析 DSH、Python、Node、DSH runtime 模块目录，以及已配置的 huashu-chrome。它可能执行 `dsh --version`，但不会打开模型会话。显式配置具有权威性：无效的 `DSH_BIN`、`DSH_PYTHON`、`NODE_BIN` 或 `HUASHU_CHROME_ENTRY` 会直接报配置错误，不会静默回退到另一个安装。
 
-Codex 原生 Luna 通道直接使用宿主提供的 `gpt-5.6-luna` 子 Agent，不需要 OpenCode、`DEEPSEEK_API_KEY` 或其他外部 Provider 凭据。是否可用以当前 Codex 宿主和账号为准。
+DSH 安装位置特殊时，可在启动 Codex 前配置：
 
-插件不保存 API Key。每台电脑都要在本机交互式认证：
+| 变量 | 用途 |
+|---|---|
+| `DSH_BIN` / `--dsh` | DSH CLI 可执行文件 |
+| `DSH_PYTHON` | 控制器/MCP 使用的 Python 3.9+ |
+| `NODE_BIN` | huashu-chrome MCP 使用的 Node |
+| `DSH_RUNTIME_ROOT` | 已安装的 `@deepseek-ai` 模块目录，供 `controller_link` 导入 |
+| `HUASHU_CHROME_ENTRY` / `--huashu-entry` | huashu-chrome 的 `src/cli.js` |
+| `HUASHU_CHROME_VERSION` | 核对后显式接受其他 huashu 版本 |
+
+不要把凭据写进 prompt、任务文件、仓库文件或插件目录。
+
+## 使用 DSH
+
+用自然语言提出，或显式调用 Skill：
 
 ```text
-opencode auth login
-opencode models opencode-go
+使用 $dsh-delegate 完成这个有界改动，运行相关测试、修复失败并汇报结果。
 ```
 
-确认模型列表中包含：
+主对话通常按以下顺序调用：
 
-```text
-opencode-go/deepseek-v4.1-flash
-```
+1. `spawn_agent`：传入 `task`、`workspace`、`scope_paths`，以及经选择的 `context_files` / `required_reads`。
+2. `wait_agent`：需要进度、待答问题或结果时，带上返回的 `cursor`。
+3. `send_message`：纠偏并续用同一会话；`reply_agent`：回答真正的待答问题。
+4. `inspect_agent`：紧凑查看状态；方向错误时 `interrupt_agent`。
+5. `list_agents`：重启后恢复控制；协作结束时 `close_agent`。
 
-不要把 Provider Key 粘贴到 Codex 提示词、GitHub Issue、日志或仓库文件中。
+### 八个操作
 
-## 选择执行通道和模型
+| 操作 | 作用 |
+|---|---|
+| `spawn_agent` | 创建持久 DSH 执行者，立即返回。 |
+| `send_message` | 补充上下文或纠偏；运行中在下一模型边界进入，空闲时续用原会话。 |
+| `wait_agent` | 最多等 55 秒，返回新消息、待答问题、完成、失败或暂停；复用 cursor。 |
+| `inspect_agent` | 不等待，读取紧凑状态。 |
+| `reply_agent` | 回答 `request_id`，原执行继续。 |
+| `interrupt_agent` | 停止当前执行并清理本代理进程组，保留会话。 |
+| `list_agents` | 列出本适配器记录的代理。 |
+| `close_agent` | 结束协作，保留会话/结果记录。 |
 
-日常可以直接在 Codex 里口述。例如：“这段范围明确的实现使用 Codex 原生 GPT-5.6 Luna 子 Agent。”这会选择原生通道；没有明确说推理档位时，Codex 应在 spawn 中传 `model="gpt-5.6-luna"` 和 `reasoning_effort="max"`。它不调用 `ds_check`、`ds_spawn_agent` 或 OpenCode，也不能把 Luna 填进插件的 `provider` 字段。Luna 可显式请求 `none`、`low`、`medium`、`high`、`xhigh` 或 `max`；如果明确要求“默认档位/自动”，才省略该字段。如果当前宿主不支持所选组合，Codex 应明确报告，不能静默换通道。
+`scope_paths` 是任务边界，不是 OS 权限白名单。`context_files` 和 `required_reads` 是显式文本材料，单份上限 64 KiB，整包 160 KiB；DSH 会原生读取适用的 `AGENTS.md`。不导出凭据、私有 Codex 会话或无关文件。
 
-Luna 选择只作用于本次要求的工作。`ds_model_defaults` 只保存 OpenCode Worker 默认值，不能持久化 Codex 原生模型偏好。原生子 Agent 创建后固定使用当时选择的模型；换模型要新建子 Agent。
+超时、中断和控制器错误会暂停会话，不会自动重放不确定的写入；后续 `send_message` 在同一会话中带明确纠正继续。待答问题最多等 180 秒，超时不是同意。
 
-也可以直接给一组工蜂统一指定模型。例如“当前任务所有工蜂都用 5.6 Luna”，表示从这条指令之后，本任务新建的每个工蜂都走 Codex 原生 Luna；“本次全部工蜂使用 Go GLM 5.3 Flash”则让本任务新建的 OpenCode Worker 统一使用该模型，但不改本机默认值。已经创建的工蜂保持原模型，需要换模型时应新建替代工蜂。“所有工蜂”默认只作用于当前任务或当前 Codex 会话；只有明确说“以后 / 全局 / 所有新执行者”才表示持久偏好，而且 Luna 仍不能通过 `ds_model_defaults` 持久化。
+### 默认值与上下文
 
-普通纠错循环和隔离编码不需要为了 Luna 再经过 OpenCode。Codex 可以在当前任务内保留原生子 Agent，使用宿主原生协调能力排队或发送追加消息、等待或中断，并把 Luna 分配到宿主管理或 Codex 预先创建的 Git worktree。这些属于 Codex 编排能力，不是 Luna 模型能力。只有需要跨任务/重启发现控制器状态、OpenCode 上下文 fork、外部 Provider 用量记录或持久化 `task_spec` 验收时，才应因为生命周期能力优先 OpenCode Worker。
+- 模型：`deepseek-official` / `deepseek-flash`，推理 `max`，来自 `skills/dsh-delegate/config/max.yml`。
+- `deepseek-flash` 是提供商别名，实际底层版本可能随 DSH 更新；升级后请核实，而不是承诺固定版本。
+- 上下文是任务加显式上下文包；不传输主对话的全部私有聊天记录。
+- DSH 是独立持久会话，不是把 DSH 注册为 Codex 内部模型。
+- 适配器默认把协作记录放在 `~/.local/share/dsh-delegate/agents`；空闲代理只保留文件，不保留后台守护进程。
 
-[OpenAI 官方将 GPT-5.6 Luna 定位为面向成本敏感、高吞吐工作负载的模型](https://developers.openai.com/api/docs/models/gpt-5.6-luna)。公开 API 价格不能直接证明 Codex 套餐如何计算原生子 Agent 用量，因此本项目不会在缺少同条件 Codex 实测时承诺固定节省比例。
+### 当前 Chrome（可选）
 
-对于 OpenCode Worker 通道，未保存本机偏好时，内置默认是 `opencode-go/deepseek-v4.1-flash`，推理档位 `max`。`ds_check` 和 `ds_spawn_agent` 可以传入：
+链路是 **DSH → huashu-chrome MCP → 本机共享 bridge → 用户 Chrome 扩展**。huashu-design 是设计技能，不提供该浏览器通道。
 
-| 通道 | `provider` | `model` |
-|---|---|---|
-| Go DeepSeek | `opencode-go` | `deepseek-v4.1-flash` |
-| Go GLM | `opencode-go` | `glm-5.3-flash` |
-| 官方 Flash | `deepseek` | `deepseek-flash` |
-| 官方 Pro | `deepseek` | `deepseek-v4-pro` |
+`spawn_agent` 传入已分配的 `tab_id` 和预期 `url`。DSH 先 `learnings`，再 snapshot 该标签并核实身份，每次浏览器调用都带这个 tab ID。同一共享标签的操作串行执行；任务期间主对话不要操作该标签。
 
-OpenCode 模型同样可以直接口述。单独提出该通道的模型和推理档位设置时，默认保存到本机全局；如果是临时使用，加上“这次”或“仅当前任务”：
+登录态不等于授权。DSH 只能在用户明确授权的动作范围内使用已登录页面，不能仅因页面已登录就支付、发消息、删除数据或写业务记录。`allowSensitive` 只适用于已经明确授权的具体动作。遇到 `NO_EXTENSION` 应停止并等主对话确认重连；写入结果不明时先核对，绝不重复可能已完成的写操作。
 
-- “以后都用 OpenCode Go 的 GLM 5.3 Flash，推理开到最大”——保存本机全局默认，之后新建的执行者和未来 Codex 任务都继承。
-- “这次走 DeepSeek 官方 API，用 Flash，推理最高”——只覆盖当前任务的新执行者。
-- “当前默认用什么模型？”——查询实际保存的配置。
-- “恢复插件原来的默认模型”——清除本机偏好，恢复内置默认。
+## Legacy OpenCode/Luna 通道
 
-“最大 / 最高 / 拉满”都会映射到 `max`。OpenCode 口述由技能转换成明确的 provider、模型和档位，再通过 `ds_model_defaults` 保存到本机；偏好不写进插件包，重装后仍保留。全局只指本插件的新 OpenCode Worker，Codex 主控模型和原生 Luna 子 Agent 不受它影响。
+旧通道仍保留以兼容：
 
-选定的模型会随会话保存，追加消息、队列、重启和 fork 都保持该选择。更换模型需要新建执行者；出错时不会自动换通道。
+- MCP：`deepseek_code_agent`，提供 `ds_spawn_agent`、`ds_check`、`ds_verify_agent`、`ds_send_message`、`ds_wait_agent`、`ds_inspect_agent`、`ds_fork_agent`、`ds_interrupt_agent`、`ds_reply_agent`、`ds_list_agents`、`ds_close_agent`、`ds_model_defaults`。
+- Skill：`deepseek-coding-delegation`，已标记 legacy，并配置 `policy.allow_implicit_invocation: false`。
+- 只有用户明确要求 OpenCode、`ds_*` 或原生 Luna 时才使用。用户明确要求 DSH 时，绝不能用 OpenCode 或 Luna 替换。
 
-`variant` 可以省略：沿用本机默认模型时继承保存的档位；显式切换到不同 provider/model 且未指定档位时，所有外部模型都默认 `max`，包括 Go GLM、官方 Flash 和 Pro。同一模型的已保存档位优先，已保存的 `null` 也要保留；显式传 `null` 可让本次请求使用运行时默认值。传字符串时必须是本机模型目录支持的档位。这两个 provider 中已配置到 OpenCode 目录的其他模型 ID 也可使用。
-
-走官方 API 时，在 OpenCode 中使用 `/connect → DeepSeek`，也可以运行 `opencode auth login`。另一种方式是在启动 Codex 前给宿主进程设置 `DEEPSEEK_API_KEY`，插件会传给 OpenCode。官方内置 provider 通常请求 `https://api.deepseek.com`，使用独立的 DeepSeek API 账号；工具执行和多轮上下文仍由 OpenCode 管理。插件不会改写 endpoint 或保存密钥。
+旧前置检查需显式运行：
 
 ```bash
-npm --prefix plugins/deepseek-code-agent run check -- --model glm-5.3-flash --variant max
-npm --prefix plugins/deepseek-code-agent run check -- --provider deepseek
+npm --prefix plugins/deepseek-code-agent run check:legacy
 ```
 
-前置检查会区分“目录中有模型”和“本机 provider 已配置”，不会请求推理模型，也不会验证密钥、余额或额度。项目配置、缺失模型和更多命令见 [模型选择与排错](plugins/deepseek-code-agent/skills/deepseek-coding-delegation/references/model-selection.md)。模型 ID 依据 [OpenCode Go 文档](https://opencode.ai/docs/go/) 和 [DeepSeek 当前官方模型说明](https://api-docs.deepseek.com/quick_start/pricing/)。
-
-## 分系统准备
-
-### macOS
-
-使用常用包管理器安装 Git 和 Node.js，然后安装 OpenCode：
+旧 OpenCode 付费 live smoke 同样需显式运行，不属于默认 DSH 流程：
 
 ```bash
-npm install -g opencode-ai@latest
-opencode --version
+npm --prefix plugins/deepseek-code-agent run test:legacy-live
 ```
 
-### Linux
+除非你明确要验证旧 OpenCode provider 并接受配额消耗，否则不要运行。
 
-使用发行版包管理器或 Node 安装器准备 Git 和 Node.js 18+，然后执行：
+## 安全边界
 
-```bash
-npm install -g opencode-ai@latest
-opencode --version
-```
+- Codex 保留用户需求解释、授权、关键决策和最终验收。
+- DSH 负责有界实现、测试、普通修复和交付；它的自报不是验收。
+- 委派本身不授权 commit、push、merge、部署、生产数据写入、凭据导出或修改无关文件。
+- `scope_paths` 是任务边界，不是安全沙箱。
+- 控制器只清理当前 turn 由它启动、且 PID/PGID 归属关系可核实的进程组；必要时再用 DSH 命令确认。不会杀共享服务或无关标签页。
+- 默认状态目录属于当前用户，结果和消息使用受限权限。
+- 仓库不包含 Chrome cookie、凭据、DSH 会话、npm 缓存或个人数据。
 
-### Windows
+## 开发与测试
 
-安装 Git for Windows 和 Node.js 18+，打开 PowerShell，然后执行：
-
-```powershell
-npm install -g opencode-ai@latest
-opencode --version
-```
-
-桥接器会识别 Windows npm 生成的 `opencode.cmd`，并通过 `cmd.exe` 启动。如果 OpenCode 安装在特殊位置，请在启动 Codex 前把 `OPENCODE_BIN` 设置为对应 `.cmd`、`.bat` 或可执行文件的完整路径。
-
-OpenCode 的安装命令可能变化；如果 npm 命令失效，请查阅 [OpenCode 官方文档](https://opencode.ai/docs/)。
-
-## 验证安装
-
-在新的 Codex 任务中发送：
-
-> 运行 DeepSeek Code Agent 前置检查，并告诉我识别到的系统、Node、Git、OpenCode、Provider、模型和推理档位。
-
-也可以在本仓库运行：
+可安装插件位于 [`plugins/deepseek-code-agent`](./plugins/deepseek-code-agent)。仓库根同时是 Codex Git marketplace。
 
 ```bash
 npm --prefix plugins/deepseek-code-agent test
 npm --prefix plugins/deepseek-code-agent run check
 ```
 
-真实冒烟会调用一次模型，可能消耗套餐额度：
+`npm test` 运行：
 
-```bash
-npm --prefix plugins/deepseek-code-agent run test:live
-```
+- Python DSH 测试：八接口、MCP framing、生命周期与进程清理、队列/消息边界、待答问题、中断/超时续接、上下文包上限、越界 scope、安装相对路径/特殊字符路径、输出过滤；
+- 现有 Node 测试：旧 OpenCode 控制器、验证、路由策略、MCP 和安装接线。
 
-## 使用方式
+CI 在 Ubuntu、macOS、Windows 上运行。Linux/macOS 用假 DSH 覆盖 DSH Python 生命周期；Windows 覆盖明确的“不支持运行”预检，以及不依赖 POSIX 进程组的部分。测试不调用真实模型或 provider API；旧付费 live 测试不会进入 CI。
 
-在 Codex 中创建编码目标，或者显式调用随插件提供的 Skill：
+历史测量保留用于审计，不是当前 DSH 证据：
 
-```text
-/goal 完成这个功能。由 Codex 做主控，把范围明确的编码实现委派给 DeepSeek。
-```
+- [2026-09-14 token-routing benchmark](./docs/token-routing-benchmark-2026-09-14.md)
+- [2026-09-15 task-routing pilot](./docs/task-routing-pilot-2026-09-15.md)
+- [2026-09-15 reading-delegation retest](./docs/reading-delegation-retest-2026-09-15.md)
+- [Queen token efficiency protocol](./docs/queen-token-efficiency.md)
 
-```text
-使用 $deepseek-coding-delegation 委派实现，并由 Codex 审核结果。
-```
+这些文档描述其原始 OpenCode/Luna 时代设置、有限次数运行和既定局限，不是 DSH benchmark，也不承诺省 token。
 
-如需完全使用 Codex 原生低成本通道，可以直接说：
-
-```text
-这段范围明确的实现用 Codex 原生 GPT-5.6 Luna，推理开到最大。不要使用 OpenCode 或外部 Provider 凭据，结果由 Codex 审核并独立验证。
-```
-
-使用原生 Luna 时，Codex 通过内置委派传入边界明确的任务和必要仓库上下文；使用 OpenCode 通道时，Codex 传入明确的 `scope_paths`、任务相关 `required_reads` 和精简的 `critical_constraints`。两种通道都由 Codex 独立审核 diff 与测试。
-
-## Queen Token 优化
-
-### 按预期收益与任务复杂度路由
-
-路由依据预期能省下的 Queen 工作、风险以及探索与验证负担，而不是行数或文件数。**小型**已知改动，以及紧密关联的读取分析、诊断，默认由 Codex 直接完成，尤其是 Queen 复核时仍需重做大部分调查的情况。**中型**重复实现或独立资料批次可以考虑委派，但预期省下的 Queen 工作应能抵消派发、审查和纠错成本，并符合时间约束；收益不明确就直接做。读取量大、模型便宜或有空闲并发位，都不是单独成立的委派理由，也不要求先跑基准才能路由。确定值得委派后，范围明确、风险较低的原生子任务优先使用 `gpt-5.6-luna`，当前任务内的连续纠错、消息队列和由 Codex 管理的独立 worktree 也可以继续走 Luna。用户明确选择 DeepSeek/GLM，或任务确实需要跨任务/重启发现、控制器状态落盘、OpenCode 上下文 fork、外部 Provider 用量记录或持久化 `task_spec` 验收时，再优先 OpenCode Worker。**大型或高风险**任务（状态机、并发、权限、事务、迁移等）只能把边界明确的劳动交给任一通道。用户需求的解释、关键决定和最终验收由 Codex 保留；涉及改代码的委派前，Codex 先核查约束范围内的关键契约和设计不变量。已确定值得委派的只读探索，不要求 Queen 派发前先重复读完整条调用链。绝不按 Worker 自报或自测通过来接受；用户对本次或全部工蜂的明确模型选择优先于自动路由，任何失败都不能触发静默跨通道降级。
-
-2026-09-15 的 pilot 在同一基线 commit 上为每个规模各做了一次 Codex 直接执行与委派 DeepSeek 执行：[任务分级 pilot](./docs/task-routing-pilot-2026-09-15.md)。它没有测试 Luna。每格仅一次、双臂并行、顺序未交替，因此它不是 queen 协议要求的三次重复正式基准，结果不能推广，也不承诺固定节省。该 pilot 中，worker 非缓存输入加输出合计比三次 direct 低 13.78%，controller 自身区间的 proxy 比 direct proxy 合计低 55.41%；controller 区间也包含管理 Codex 直接执行对照组和审查两组结果，不能当作纯委派账单。计入缓存后 worker total 高于 direct total，总 Token 和耗时仍可能增加；medium 和 large 的 worker 用量标记为不完整。
-
-### 确定值得委派后：Codex 设计与审核，工蜂执行
-
-Codex 保留用户需求解释、关键设计取舍和最终验收。路由判断支持委派时，工蜂可以先做有范围的只读探索、索引或资料整理。例如：“读取相关 service 和测试，只返回带范围/版本的证据包：结论、源码/测试定位、关键短摘录，以及未核查或不确定项；不要修改文件。”涉及改代码前，Codex 核查关键契约和设计不变量，再给出边界明确的目标与验收案例。原生 Luna 子 Agent 通过 Codex 自身的委派通道接收任务；OpenCode Worker 还可以接收持久化 `task_spec`、worktree 和精确检查命令。普通读取和实现不需要逐步汇报，只在有意义的阻塞时升级，并把普通问题合并反馈。Codex 按风险关键处和缺口独立核查实际补丁，不重做全部探索，也不只凭摘要签收；OpenCode 原有纠错生命周期保持不变。
-
-新增 `ds_verify_agent`：只在 worker 空闲时运行预先保存的检查，保留退出码和完整日志，并将结果绑定到源码、Git 暂存区、任务规范和指令身份。代码变化会使旧证据失效；重复查询只读取同一异步任务，显式设置 `rerun=true` 才重新执行。`ds_wait_agent(return_on="actionable")` 在程序内处理短暂重试，连续重试 120 秒后升级为需处理事件。使用宿主支持的有界等待：55 秒等待和 65 秒宿主超时保持不变，超时可能需要再次进行有界等待；不承诺零轮询、重启后仍自动完成或后台唤醒，旧调用兼容。
-
-详见[任务与验收契约](plugins/deepseek-code-agent/skills/deepseek-coding-delegation/references/control-contract.md)。原历史更新当时完成了本地功能验证，但没有附带模型对比实测；之后有日期的 pilot 或复测应单独记录，不能把这句变成对当前版本永远成立的结论。
-
-默认流程让 **queen（Codex）专注于最影响质量的判断**：理解需求、关键设计与取舍、疑难诊断、风险审查和最终验收。值得委派时，Luna 或 OpenCode Worker 承担范围内的探索、实现、测试、常规修复、文档和证据整理。选择性读取、批量工具输出和精简汇报同样适用于 Queen 直接做，不需要为了降噪先开工蜂。优化目标是主控总 Token（`input + output`）；若报告的 `input` 已含缓存输入，不得再次相加。未缓存输入加输出只作为另列的 proxy，工蜂用量也单独记录；不要求合计 Token 或耗时更低。一次委派一个完整行为；OpenCode 纠错复用持久会话，原生 Luna 更换模型时新建子 Agent。不能仅因读取量大就委派；指定工蜂模型也不等于必须创建工蜂。
-
-`ds_wait_agent` 和 `ds_inspect_agent` 默认只返回精简状态、待处理请求、执行者累计用量和有长度上限的最终交付摘要。普通等待不再带回任务回声、工具过程日志或重复指令清单。需要诊断或补全证据时使用 `detail="full"`，需要 diff 时显式设置 `include_diff=true`。保存首次 spawn 的清单，并持续复用返回的 cursor。
-
-回传内容缩小可以测量，但**不能直接等同于整项任务节省了多少 Token**。桥接器无法读取 queen 用量；必须对同一任务做直接执行与委派的对照，统计实际 queen 用量，包含失败、审核和纠错，并单列 DS 用量。详见 [queen 验收方法](./docs/queen-token-efficiency.md)。
-
-[原有 27 个最终结果的合成基准](./docs/token-routing-benchmark-2026-09-14.md)统计的是 Codex + DeepSeek 总量，在各档任务上委派都更高。保留这一结论；它不能证明新版 queen 单独节省了多少。总 Token 和耗时仍可能增加。
-
-## 安全边界
-
-- Codex 负责范围、授权、业务决定、审核、验证和目标完成状态。
-- 原生 Luna 子 Agent 和 OpenCode Worker 都不得在没有用户授权时自行提交、推送、合并、部署、修改生产数据、暴露凭据或丢弃无关改动。
-- Luna 使用 Codex 内置委派通道，不接收 OpenCode Provider 字段或外部凭据；任一通道失败都不能静默切换模型或 Provider。
-- 隔离 worktree 从已提交的 `HEAD` 创建，不包含未提交文件。
-- 指令清单记录执行者收到的准确路径、哈希和读取范围，但不能证明语义上完全服从，因此 Codex 仍须审核补丁。
-- 本地 OpenCode 服务只绑定 `127.0.0.1`，每次进程使用随机密码。
-
-## 开发
-
-可安装插件位于 [`plugins/deepseek-code-agent`](./plugins/deepseek-code-agent)，仓库根目录同时也是 Codex Git marketplace。
-
-```bash
-npm --prefix plugins/deepseek-code-agent test
-python3 /path/to/plugin-creator/scripts/validate_plugin.py plugins/deepseek-code-agent
-```
-
-GitHub Actions 会在 Windows、macOS 和 Linux 上运行测试。公开 CI 不运行 Provider 真实调用，因为仓库不会保存凭据。
-
-## 许可证
+## License
 
 [MIT](./LICENSE)

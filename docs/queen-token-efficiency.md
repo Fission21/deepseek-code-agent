@@ -1,5 +1,7 @@
 # Queen token efficiency
 
+> **Historical OpenCode/Luna-era protocol.** It is retained for auditability and is not a measurement of the current DSH lane. It does not promise token savings.
+
 This workflow preserves queen (Codex) judgment and delegates only when there is a clear expected benefit from moving bounded labor out of the queen's workload. The queen owns interpreting the user's request, consequential decisions, uncertain diagnoses, risk-focused review and final acceptance. For justified delegation, read-only discovery, indexing and document gathering may happen first; before code changes, the queen checks the key contracts and design invariants that bound the implementation. The worker can consume more tokens to do that labor. This does not require lower combined token use.
 
 The goal is not a queen that rubber-stamps a short report. Each worker handoff returns a scoped/versioned evidence packet: conclusions with source/test locations, short supporting excerpts, and explicit unexamined or uncertain items. The queen independently checks risk-critical paths and gaps without repeating all exploration. Ordinary reading and implementation need no step-by-step report; meaningful blockers are escalated and ordinary issues are batched.

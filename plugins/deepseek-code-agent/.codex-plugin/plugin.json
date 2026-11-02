@@ -1,7 +1,7 @@
 {
   "name": "deepseek-code-agent",
-  "version": "0.1.0+codex.20260915081857",
-  "description": "Route coding to Codex-native Luna or persistent DeepSeek/GLM workers, with Codex review.",
+  "version": "0.2.0",
+  "description": "Delegate bounded work to local DeepSeek Harness (DSH) by default, with an explicit legacy OpenCode/Luna lane.",
   "author": {
     "name": "Fission21",
     "url": "https://github.com/Fission21"
@@ -11,18 +11,19 @@
   "license": "MIT",
   "keywords": [
     "codex",
+    "dsh",
+    "deepseek-harness",
     "deepseek",
-    "opencode",
     "coding-agent",
     "multi-agent",
-    "glm",
-    "luna"
+    "huashu-chrome",
+    "opencode"
   ],
   "skills": "./skills/",
   "interface": {
     "displayName": "DeepSeek Code Agent",
-    "shortDescription": "Route work to native Luna or DeepSeek/GLM with Codex review.",
-    "longDescription": "Routes bounded work to a Codex-native GPT-5.6 Luna subagent or configurable persistent DeepSeek/GLM workers through OpenCode, with natural-language selection, scoped instructions, corrections, diffs and Codex-owned review and verification.",
+    "shortDescription": "Default local DSH worker with an explicit legacy OpenCode lane.",
+    "longDescription": "Runs bounded coding, review, testing and browser work in a persistent local DeepSeek Harness session by default, with scoped context, corrections, pending questions, interruption and the current-Chrome huashu bridge. The older OpenCode ds_* controller remains available only when explicitly selected.",
     "developerName": "Fission21",
     "category": "Developer Tools",
     "websiteURL": "https://github.com/Fission21/deepseek-code-agent",
@@ -32,11 +33,9 @@
       "Interactive"
     ],
     "defaultPrompt": [
-      "Use Codex-native GPT-5.6 Luna with maximum reasoning for this bounded implementation; do not use OpenCode or external credentials.",
-      "Use GPT-5.6 Luna with maximum reasoning for all new workers in this task, reusing native follow-ups and isolated worktrees where useful.",
-      "Use DeepSeek or GLM to implement this coding goal, then review and verify its patch.",
-      "Set OpenCode Go GLM 5.3 Flash with maximum reasoning as my machine default for new coding workers.",
-      "Show the current OpenCode worker default and inspect the active coding agent."
+      "Delegate bounded implementation to local DSH with DeepSeek Flash and max reasoning, then review the result.",
+      "Use DSH to investigate and fix this repo, including tests, then report changed files and checks.",
+      "Use the legacy OpenCode ds_* lane only because I explicitly asked for it."
     ]
   },
   "mcpServers": "./.mcp.json"

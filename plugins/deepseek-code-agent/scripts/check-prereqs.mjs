@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// Legacy OpenCode/Luna prerequisite check. The default DSH check is
+// `node ./dsh-server.mjs --check` (npm run check).
 import { DeepSeekController } from "../src/controller.mjs";
 
 const controller = new DeepSeekController();

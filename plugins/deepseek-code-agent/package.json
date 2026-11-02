@@ -1,12 +1,17 @@
 {
   "name": "deepseek-code-agent-codex-plugin",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
+  "description": "Default local DSH worker lane plus an explicit legacy OpenCode/Luna lane for Codex.",
   "scripts": {
-    "check": "node ./scripts/check-prereqs.mjs",
-    "test": "node --test ./tests/controller.test.mjs ./tests/mcp.test.mjs ./tests/workflow-core.test.mjs ./tests/verification.test.mjs ./tests/routing-policy.test.mjs",
-    "test:live": "node ./tests/live-smoke.mjs"
+    "check": "node ./dsh-server.mjs --check",
+    "check:dsh": "node ./dsh-server.mjs --check",
+    "check:legacy": "node ./scripts/check-prereqs.mjs",
+    "test": "node ./scripts/test-all.mjs",
+    "test:node": "node --test ./tests/controller.test.mjs ./tests/mcp.test.mjs ./tests/workflow-core.test.mjs ./tests/verification.test.mjs ./tests/routing-policy.test.mjs ./tests/install.test.mjs ./tests/controller-link.test.mjs",
+    "test:dsh": "node ./scripts/test-all.mjs --python-only",
+    "test:legacy-live": "node ./tests/live-smoke.mjs"
   },
   "engines": {
     "node": ">=18"

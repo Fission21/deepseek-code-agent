@@ -1,18 +1,20 @@
 ---
 name: deepseek-coding-delegation
-description: Route coding and read-heavy engineering work between direct Codex execution and bounded Luna/DeepSeek/GLM workers based on expected Queen-token benefit. Use for delegation decisions and worker model/default settings; keep tightly coupled investigation and tiny known edits direct unless the user requests delegation.
+description: Legacy OpenCode/Luna delegation lane. Use only when the user explicitly asks for OpenCode, the ds_* tools, or GPT-5.6 Luna; the default external worker is $dsh-delegate and must not be replaced implicitly.
 ---
 
-# DeepSeek Coding Delegation
+# DeepSeek Coding Delegation (legacy)
+
+> **Legacy, explicit-only lane.** The default external worker is `$dsh-delegate` (local DeepSeek Harness). This skill is not implicitly invoked. If the user selected DSH, never substitute OpenCode or Luna. Do not require or rerun the DSH test suite as a gate for this legacy lane; use its normal review and checks.
 
 Reduce **queen (Codex) model tokens**, not its responsibility. The queen interprets the user's needs, decides consequential tradeoffs and accepts the result. Workers can spend more tokens on discovery, repetitive reading, implementation, tests, ordinary repairs and evidence preparation. Neither total-system savings nor quality follows automatically from delegation.
 
 ## Choose the work boundary
 
-- Honor an explicit direct/delegated choice. Otherwise keep tiny known edits and tightly coupled reading or diagnosis with the queen, especially when it would need to repeat most of the worker's investigation.
-- Before automatic delegation, identify the separable labor it removes from the queen and weigh that against dispatch, evidence review and likely correction work, while respecting time constraints. Large reading volume, a cheaper worker or available parallel slots alone do not establish a benefit. If the expected benefit is unclear, work directly; this judgment does not require a new benchmark or approval step.
-- Repetitive implementation or independent evidence batches with clear acceptance can justify delegation. Once delegation is justified, prefer native `gpt-5.6-luna` for bounded low-risk work when available, unless another model/lane was selected. Parallelize only genuinely independent work, not a separate worker per question or command; more workers do not automatically save queen tokens.
-- Prefer DeepSeek/GLM through OpenCode when selected by the user or when cross-task/restart state discovery, OpenCode context forks, external-provider accounting or persisted `task_spec` verification materially helps. Task-scoped corrections and a Codex-managed worktree do not alone require OpenCode.
+- Honor an explicit direct/delegated choice. This skill applies only after the user explicitly selects OpenCode, `ds_*`, or native Luna; otherwise keep tiny known edits and tightly coupled reading or diagnosis with the queen, or use `$dsh-delegate`.
+- Do not use this skill to make an automatic delegation decision. If the user has not named this legacy lane, stop and use the default `$dsh-delegate` path instead.
+- If the user explicitly selected native `gpt-5.6-luna`, use it for that bounded work; if they explicitly selected OpenCode/`ds_*`, use that lane. Do not choose between them on the user's behalf and do not silently substitute either for a DSH request. Parallelize only genuinely independent work; more workers do not automatically save queen tokens.
+- OpenCode context forks, external-provider accounting and persisted `task_spec` verification are available only in this explicitly selected legacy lane.
 - For risky implementation (state machines, concurrency, permissions, transactions, migrations), the queen decides interfaces, invariants, failure semantics and acceptance before code changes. It may implement a difficult core itself and delegate surrounding labor; it is not limited to reviewing workers.
 
 ## When read-heavy delegation is justified
@@ -44,10 +46,10 @@ Selective reading, batched tool output and concise reporting also apply when the
 
 ## Models and native Luna
 
-- An explicit per-task or fleet instruction (for example “当前任务所有工蜂都用 5.6 Luna”) overrides automatic routing for every new delegate in that scope. Existing workers retain their creation-time selection; replace them deliberately to change models, preserving useful work. Unless the user says future/global, the scope is this task/thread. Selecting a worker model does not itself require spawning a worker.
+- Within this explicitly selected legacy lane, an explicit per-task or fleet instruction (for example “当前任务所有工蜂都用 5.6 Luna”) applies to every new delegate in that scope. Existing workers retain their creation-time selection; replace them deliberately to change models, preserving useful work. Unless the user says future/global, the scope is this task/thread. Selecting a worker model does not itself require spawning a worker.
 - Spawn native Luna with `model="gpt-5.6-luna"` and **`reasoning_effort="max"`** unless the user explicitly requests another effort. Explicit “默认/自动” means omit effort; an unspecified effort still means max. Prefer focused task context to a full conversation fork when the host permits it. Preserve the relevant instructions and constraints in that context.
 - Use native spawn/message/follow-up/wait/interrupt capabilities and retain the agent ID for coherent task-scoped corrections. Never call `ds_*`, start OpenCode or pass external credentials for Luna. Native availability and effort support come from the active host; unsupported selections must be reported, not silently lowered or rerouted.
-- Native model preferences cannot be persisted with `ds_model_defaults`. For external model/default requests, authentication, catalog errors or detailed selection precedence, read [model selection](references/model-selection.md). External defaults and task overrides remain distinct; existing sessions/forks keep their saved selection. Ordinary OpenCode dispatch inherits saved defaults, with Go DeepSeek/max as the fallback when none are saved.
+- Native model preferences cannot be persisted with `ds_model_defaults`. For external model/default requests, authentication, catalog errors or detailed selection precedence, read [model selection](references/model-selection.md). External defaults and task overrides remain distinct; existing sessions/forks keep their saved selection. When this legacy lane is explicitly selected, OpenCode dispatch inherits saved defaults, with Go DeepSeek/max as the fallback when none are saved.
 
 ## Workspace and OpenCode lifecycle
 

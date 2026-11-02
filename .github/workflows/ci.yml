@@ -12,15 +12,32 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        node: [18, 22]
+        include:
+          - os: ubuntu-latest
+            node: 18
+            python: "3.9"
+          - os: ubuntu-latest
+            node: 22
+            python: "3.12"
+          - os: macos-latest
+            node: 22
+            python: "3.12"
+          - os: windows-latest
+            node: 22
+            python: "3.12"
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
-      - name: Run unit and MCP protocol tests
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Run DSH, MCP, and legacy compatibility tests
         working-directory: plugins/deepseek-code-agent
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
         run: npm test

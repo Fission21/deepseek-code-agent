@@ -1,5 +1,33 @@
 {
   "mcpServers": {
+    "dsh_agents": {
+      "command": "node",
+      "args": ["./dsh-server.mjs"],
+      "cwd": ".",
+      "env_vars": [
+        "PATH",
+        "HOME",
+        "USERPROFILE",
+        "LOCALAPPDATA",
+        "TMPDIR",
+        "TEMP",
+        "DSH_BIN",
+        "DSH_CLI",
+        "DSH_HOME",
+        "DSH_PYTHON",
+        "DSH_RUNTIME_ROOT",
+        "NODE_BIN",
+        "HUASHU_CHROME_ENTRY",
+        "HUASHU_CHROME_VERSION",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY"
+      ],
+      "startup_timeout_sec": 20,
+      "tool_timeout_sec": 70,
+      "default_tools_approval_mode": "approve"
+    },
     "deepseek_code_agent": {
       "command": "node",
       "args": ["./server.mjs"],

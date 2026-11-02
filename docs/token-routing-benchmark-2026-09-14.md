@@ -1,5 +1,7 @@
 # Token Routing Benchmark — 2026-09-14
 
+> **Historical OpenCode/Luna-era benchmark.** It is not a measurement of the current DSH lane and does not establish a fixed saving.
+
 This report measures whether routing Codex implementation work through DeepSeek reduces total model tokens. It is a project-maintainer benchmark, not an independent evaluation or a universal model ranking.
 
 ## Setup

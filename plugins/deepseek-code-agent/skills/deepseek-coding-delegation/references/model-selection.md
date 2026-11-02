@@ -1,5 +1,7 @@
 # Worker lanes, models and authentication
 
+> **Legacy OpenCode/Luna reference.** The default external lane is `$dsh-delegate`; this page is only for an explicitly selected legacy request. `npm run check` is the DSH preflight now; use `npm run check:legacy` for the checks below.
+
 Read this for detailed model/default selection or scope changes, external authentication, or a missing model. An ordinary native Luna task with the explicit defaults in SKILL.md does not require this reference. The `ds_*` names and plugin ID remain unchanged for compatibility.
 
 ## Natural-language requests and scope
@@ -91,11 +93,11 @@ For environment-based official authentication, supply `DEEPSEEK_API_KEY` to the 
 CLI checks from the plugin directory:
 
 ```bash
-npm run check
-npm run check -- --model glm-5.3-flash --variant max
-npm run check -- --provider deepseek
-npm run check -- --provider deepseek --model deepseek-v4-pro --variant high
-npm run check -- --model glm-5.3-flash --variant null --workspace /path/to/project
+npm run check:legacy
+npm run check:legacy -- --model glm-5.3-flash --variant max
+npm run check:legacy -- --provider deepseek
+npm run check:legacy -- --provider deepseek --model deepseek-v4-pro --variant high
+npm run check:legacy -- --model glm-5.3-flash --variant null --workspace /path/to/project
 ```
 
 `model_available` describes the runtime catalog; `provider_connected` describes local provider configuration. `ok=true` requires both plus a valid variant and Git, but **does not verify the key, balance, quota or a successful inference**. The check starts the local OpenCode server and does not call a model. Never return provider configuration objects or keys in diagnostic output.

@@ -2,207 +2,195 @@
 
 English | [简体中文](./README.zh-CN.md)
 
-**Evidence status:** This is an optional delegation experiment, not a proven way to reliably reduce controller tokens. Keep tightly coupled reading and diagnosis with Codex by default. One read-heavy pair observed 5.25% fewer queen tokens but 62.01% longer elapsed time, with unresolved quality and experimental limitations; see the [results and caveats](./docs/reading-delegation-retest-2026-09-15.md). Compact bridge responses are a separate transport improvement, not proof of token savings.
+**v0.2.0 status:** local **DeepSeek Harness (DSH)** is the default external worker. The older OpenCode/Luna lane is still shipped, but only as an explicit legacy choice. Installing this plugin does not silently substitute OpenCode or Luna when the user asks for DSH.
 
-Delegate bounded coding work either to Codex-native GPT-5.6 Luna or to DeepSeek/GLM through OpenCode. Codex remains the controller, reviewer, and final authority.
+The plugin gives Codex a `dsh_agents` MCP server, a `dsh-delegate` Skill, and the current DSH controller implementation: eight collaboration operations, persistent sessions, selected-context packets, the `deepseek-official / deepseek-flash` model with `max` reasoning, optional current-Chrome control through huashu-chrome, and the legacy `deepseek_code_agent` MCP with its original `ds_*` tools.
 
-The bundled Skill chooses among direct Codex work, a native Luna subagent, and the plugin's persistent OpenCode worker. The plugin adds mailbox-style corrections, status waiting, context forks, permission handling, isolated Git worktrees, diff inspection, and scoped repository-instruction manifests for the OpenCode lane.
+There is **no claim of fixed token savings** for DSH. DSH is an external, independently persistent session with its own tools and history. Codex sends only the context the parent selects; DSH does not automatically inherit all private Codex tools, sessions, or conversation history. Older benchmark documents in this repository remain historical evidence for their original lanes and setups, not measurements of the current DSH lane.
 
-## One-sentence installation with Codex
+## How collaboration works
 
-Paste this into a new local Codex task:
+```mermaid
+flowchart TD
+  U[User goal] --> P[Codex parent: scope, authorization, acceptance]
+  P --> S[spawn_agent: local DSH]
+  S --> W[DSH: implement, test, fix, deliver in a persistent session]
+  W --> Q{wait_agent: progress, question, or result?}
+  Q -->|progress| P
+  Q -->|ordinary blocking question| P
+  P -->|reply_agent: answer the request| W
+  P -->|send_message: correction or context| W
+  Q -->|only a genuinely missing user decision| H[Ask the user]
+  H --> A[reply_agent: answer resumes the same execution]
+  A --> W
+  Q -->|result or failure| V[Parent reviews actual changes and checks]
+  V --> C[DSH cleans resources it created for this task]
+  C --> X[close_agent]
+  X --> D[Delivery]
+```
 
-> Open <https://github.com/Fission21/deepseek-code-agent>, read the README, install this plugin on the current computer, run its prerequisite check, and never ask me to paste credentials into chat.
+The parent decides ordinary questions and corrections. A DSH `ask_parent` question is answered with `reply_agent` for that `request_id`; `send_message` is for additional context or a correction. Only a decision genuinely missing from the task goes to the user. DSH owns implementation, tests, fixes, and delivery; the parent reviews the result with the project's normal standards. Do not add a DSH-specific second full verification suite or force the parent to repeat every DSH test.
 
-Codex can then follow the platform-specific prerequisites below and install the Git marketplace. Review any local command before allowing it if your Codex permission mode requires approval.
+## What is included
 
-## Direct installation
+- **`dsh_agents`** — default MCP server exposing `spawn_agent`, `send_message`, `wait_agent`, `inspect_agent`, `reply_agent`, `interrupt_agent`, `list_agents`, and `close_agent`.
+- **`dsh-delegate`** — default Skill for DSH collaboration, current-Chrome work, and the same eight-operation contract.
+- **DSH runtime** — `worker.py`, `run_dsh.py`, `agent_api.py`, `context_packet.py`, `mcp_server.py`, the controller link, and `config/max.yml` under `plugins/deepseek-code-agent/skills/dsh-delegate/`.
+- **Legacy lane** — the existing OpenCode controller (`server.mjs`, `ds_*` tools) and legacy Skill remain available for explicit OpenCode/Luna requests. The legacy Skill has implicit invocation disabled.
+- **No bundled credentials** — no API keys, DSH/Codex session records, npm cache, user Chrome profile, cookies, or browser data.
 
-These Codex commands are identical on Windows, macOS, and Linux:
+## Requirements and platform status
+
+| Requirement | Notes |
+|---|---|
+| Codex with plugin support | Install the marketplace and start a new task so MCP tools and Skills load. |
+| Git | Required for the repository workflows and the legacy worktree lane. |
+| Node.js 18+ | Runs the plugin launcher and MCP transport. |
+| Python 3.9+ | Runs the bundled DSH controller. Set `DSH_PYTHON` for a non-default interpreter. |
+| DeepSeek Harness | Install DSH separately. The default model is `deepseek-official / deepseek-flash` with `max` reasoning. |
+| huashu-chrome 1.3.0 (optional) | Only for current-Chrome browser work. It is not auto-installed. |
+
+Platform status is explicit:
+
+- **macOS** — current real-use platform; the known working configuration is DSH `0.2.0-rc.2` and huashu-chrome `1.3.0`. The automated acceptance added with this package is offline only, using a fake DSH; this update did not add a real provider/model or Chrome live smoke test.
+- **Linux** — offline and CI tests only. Real DSH model calls and the Chrome bridge have **not** been accepted on Linux; do a small local validation before relying on them.
+- **Windows** — DSH execution is **not supported yet**. The preflight returns a structured `unsupported_platform` result instead of pretending cross-platform support. The legacy OpenCode lane can still be used separately if it works on that host.
+
+## Install
 
 ```text
 codex plugin marketplace add Fission21/deepseek-code-agent --ref main
 codex plugin add deepseek-code-agent@deepseek-code-agent
 ```
 
-Start a new Codex task after installation so the MCP tools and Skill are loaded.
+Start a new Codex task after installation. Then run the offline check (it does not start a DSH model session or call a model; it may run `dsh --version`):
 
-## Requirements
+```bash
+node <plugin-root>/dsh-server.mjs --check
+# from this repository:
+npm --prefix plugins/deepseek-code-agent run check
+```
 
-- Local Codex desktop app or Codex CLI with plugin support
-- Git
-- Node.js 18 or newer
-- A current OpenCode version (validated with 1.18.30) for the DeepSeek/GLM lane
-- OpenCode Go access for Go models, or separate official DeepSeek API credentials, when using that lane
+The check resolves DSH, Python, Node, the DSH runtime module root, and, when configured, huashu-chrome. It may invoke `dsh --version`, but it does not open a model session. Explicit paths are authoritative: an invalid `DSH_BIN`, `DSH_PYTHON`, `NODE_BIN`, or `HUASHU_CHROME_ENTRY` fails with a configuration error instead of falling back to another installation.
 
-The Codex-native Luna lane uses the host's `gpt-5.6-luna` subagent directly. It does not need OpenCode, `DEEPSEEK_API_KEY`, or another external provider credential. Availability depends on the current Codex host and account.
+If DSH is installed somewhere unusual, configure it before starting Codex:
 
-The plugin stores no API keys. Authenticate OpenCode interactively on each computer:
+| Variable | Purpose |
+|---|---|
+| `DSH_BIN` / `--dsh` | DSH CLI executable |
+| `DSH_PYTHON` | Python 3.9+ interpreter for the controller/MCP server |
+| `NODE_BIN` | Node executable used by the huashu-chrome MCP bridge |
+| `DSH_RUNTIME_ROOT` | Installed `@deepseek-ai` module directory for `controller_link` |
+| `HUASHU_CHROME_ENTRY` / `--huashu-entry` | Installed huashu-chrome `src/cli.js` |
+| `HUASHU_CHROME_VERSION` | Explicitly accept a different huashu-chrome version after checking it |
+
+Do not put credentials in prompts, task files, repository files, or this plugin.
+
+## Use DSH
+
+Ask in ordinary language, or invoke the Skill explicitly:
 
 ```text
-opencode auth login
-opencode models opencode-go
+Use $dsh-delegate to implement this bounded change, run the relevant tests, fix failures, and report the result.
 ```
 
-Confirm that the model list contains:
+The parent typically calls:
 
-```text
-opencode-go/deepseek-v4.1-flash
-```
+1. `spawn_agent` with `task`, `workspace`, `scope_paths`, and selected `context_files` / `required_reads`.
+2. `wait_agent` with the returned `cursor` when it needs progress, a pending question, or the result.
+3. `send_message` to correct the same session, or `reply_agent` to answer a real pending question.
+4. `inspect_agent` for a compact status check, and `interrupt_agent` when the direction is wrong.
+5. `list_agents` to recover control after a restart, and `close_agent` when the collaboration ends.
 
-Do not paste provider keys into Codex prompts, GitHub issues, logs, or repository files.
+### The eight operations
 
-## Select the worker lane and model
+| Operation | Purpose |
+|---|---|
+| `spawn_agent` | Start a persistent DSH worker; returns immediately. |
+| `send_message` | Add context or a correction. Running work receives it at the next model boundary; idle work resumes the same session. |
+| `wait_agent` | Wait up to 55 seconds for new messages, a pending question, completion, failure, or a paused state. Reuse the cursor. |
+| `inspect_agent` | Read compact status without waiting. |
+| `reply_agent` | Answer a pending `request_id`; the same execution continues. |
+| `interrupt_agent` | Stop the current execution and clean its owned process group while preserving the session. |
+| `list_agents` | List recorded agents managed by this adapter. |
+| `close_agent` | Close the collaboration and keep its session/result records. |
 
-Use ordinary language in Codex. For example, “Use the Codex-native GPT-5.6 Luna subagent for this bounded implementation” selects the native lane and, when no effort is stated, Codex must spawn it with `model="gpt-5.6-luna"` and `reasoning_effort="max"`. It does not call `ds_check`, `ds_spawn_agent`, or OpenCode, and it is not a value accepted by the plugin's `provider` field. Luna reasoning can be explicitly requested as `none`, `low`, `medium`, `high`, `xhigh`, or `max`; an explicit “default/automatic” request intentionally omits the effort field. If the host does not offer the requested combination, Codex reports that instead of silently switching lanes.
+`scope_paths` is an assignment boundary, not an OS permission allowlist. `context_files` and `required_reads` are explicit text materials, limited to 64 KiB per file and 160 KiB per packet. DSH loads applicable `AGENTS.md` natively. Credentials, private Codex sessions, and unrelated files are not exported.
 
-The native Luna choice is scoped to the requested work. `ds_model_defaults` stores only OpenCode worker defaults and cannot persist a native Codex model preference. A native subagent uses the model selected when it is created; changing it means creating a new subagent.
+Timeout, interrupt, and controller errors pause the session; they do not automatically replay an uncertain write. A later `send_message` resumes the same session with a clear correction. Pending questions wait up to 180 seconds; a timeout is not consent.
 
-You can also set one model for a group of delegates in ordinary language: “Use GPT-5.6 Luna for all workers in this task” makes every subsequently created delegate in that task a native Luna subagent; “Use Go GLM 5.3 Flash for all workers in this task” applies that external selection to each new OpenCode worker without changing the machine default. Existing workers keep their original model and must be replaced when the selection changes. “All workers” is task/thread scoped unless you explicitly say “future/global/all new workers”; native Luna still cannot be persisted through `ds_model_defaults`.
+### Defaults and context
 
-Luna does not need OpenCode to support ordinary correction loops or isolated coding. Codex can retain a native subagent within the current task, queue or send follow-ups through the host's native coordination controls, wait or interrupt it, and assign it a host-managed or controller-prepared Git worktree. These are Codex orchestration capabilities, not Luna model features. Cross-task/restart discovery of controller state, OpenCode context forks, external-provider accounting and persisted `task_spec` verification remain reasons to choose the plugin's OpenCode worker.
+- Model: `deepseek-official` / `deepseek-flash`, reasoning `max`, from `skills/dsh-delegate/config/max.yml`.
+- `deepseek-flash` is a provider alias; the actual underlying version can change with DSH. Verify it after upgrades rather than promising a fixed version.
+- The selected context is the task plus the explicit packet. The parent's full private Codex conversation is not transferred.
+- DSH is a separate persistent session. It is not a Codex-internal model registration.
+- The adapter stores collaboration records under `~/.local/share/dsh-delegate/agents` by default. Idle agents keep files, not a daemon; no background model process remains.
 
-[OpenAI documents GPT-5.6 Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna) as a cost-sensitive, high-volume model. Published API prices do not establish how a Codex plan meters native subagent usage, so this project does not claim a fixed Luna saving without a matched Codex measurement.
+### Current Chrome (optional)
 
-For the OpenCode worker lane, without saved machine preferences, the built-in default remains `opencode-go/deepseek-v4.1-flash` with `max` reasoning. `ds_check` and `ds_spawn_agent` accept:
+The browser chain is **DSH → huashu-chrome MCP → local shared bridge → the user's Chrome extension**. huashu-design is a design skill and does not provide this browser channel.
 
-| Route | `provider` | `model` |
-|---|---|---|
-| Go DeepSeek | `opencode-go` | `deepseek-v4.1-flash` |
-| Go GLM | `opencode-go` | `glm-5.3-flash` |
-| Official Flash | `deepseek` | `deepseek-flash` |
-| Official Pro | `deepseek` | `deepseek-v4-pro` |
+Pass an existing `tab_id` and its expected `url` to `spawn_agent`. DSH calls `learnings`, snapshots that exact tab, verifies identity, and passes the tab ID on every browser call. Operations on one shared tab are serialized. The parent must not operate that tab during the task.
 
-A standalone OpenCode model/effort-setting request saves that lane's machine default; use “this task only” for a temporary override. Use natural language: “Make OpenCode Go GLM 5.3 Flash with maximum reasoning my machine default,” “Use official DeepSeek Flash just for this task,” “Show my OpenCode worker defaults,” or “Restore the plugin's original defaults.” Maximum/最高/拉满 map to `max`.
+Login state is not authorization. A DSH task may use the existing signed-in page only within the actions the user authorized; it may not pay, send messages, delete data, or write business records merely because the tab is logged in. `allowSensitive` applies only to a specific action already authorized. On `NO_EXTENSION`, stop and wait for the parent to confirm reconnection; on an uncertain write, verify before any retry and never repeat a possibly completed write.
 
-Persistent defaults are saved through `ds_model_defaults`, apply to future workers across Codex tasks on this machine, and survive plugin reinstall. Task-specific choices override them without changing the saved preference. This setting controls plugin workers; the Codex controller model remains an app setting. The selected model persists across follow-ups, queues, restarts and forks. Changing model starts a new worker; errors never silently change providers.
+## Legacy OpenCode/Luna lane
 
-`variant` is optional. The saved model pair inherits its saved variant. When explicitly switching to another provider/model pair without a variant, every external model defaults to `max`, including Go GLM and official Flash/Pro. An explicitly saved variant for the same pair still wins, including saved `null`; an explicit `variant=null` always uses the runtime default for that request. A string must be supported by that model's local catalog. Other model IDs configured in either provider's OpenCode catalog are also supported.
+The old lane is still included for compatibility:
 
-For official API access, use OpenCode `/connect → DeepSeek` (or `opencode auth login`). Alternatively pass `DEEPSEEK_API_KEY` to the Codex host before launch; the plugin forwards it to OpenCode. The built-in official provider normally requests `https://api.deepseek.com` using your separate DeepSeek account. OpenCode still runs the coding tools and manages conversation history. The plugin does not rewrite provider endpoints or store keys.
+- MCP server: `deepseek_code_agent` with `ds_spawn_agent`, `ds_check`, `ds_verify_agent`, `ds_send_message`, `ds_wait_agent`, `ds_inspect_agent`, `ds_fork_agent`, `ds_interrupt_agent`, `ds_reply_agent`, `ds_list_agents`, `ds_close_agent`, and `ds_model_defaults`.
+- Skill: `deepseek-coding-delegation`, now marked legacy and configured with `policy.allow_implicit_invocation: false`.
+- It is used only when the user explicitly asks for OpenCode, the `ds_*` tools, or native Luna. An explicit DSH request must never be replaced by OpenCode or Luna.
+
+The legacy prerequisite check is explicit:
 
 ```bash
-npm --prefix plugins/deepseek-code-agent run check -- --model glm-5.3-flash --variant max
-npm --prefix plugins/deepseek-code-agent run check -- --provider deepseek
+npm --prefix plugins/deepseek-code-agent run check:legacy
 ```
 
-The check reports catalog availability and local provider configuration; it does not call a model or validate the key, balance or quota. See [model selection and troubleshooting](plugins/deepseek-code-agent/skills/deepseek-coding-delegation/references/model-selection.md) for project configuration, missing models and CLI examples. Model IDs are documented in [OpenCode Go](https://opencode.ai/docs/go/) and [DeepSeek's current model page](https://api-docs.deepseek.com/quick_start/pricing/).
-
-## Platform setup
-
-### macOS
-
-Install Git and Node.js using your normal package manager, then install OpenCode:
+The paid OpenCode live smoke test is explicit and is not part of the default DSH workflow:
 
 ```bash
-npm install -g opencode-ai@latest
-opencode --version
+npm --prefix plugins/deepseek-code-agent run test:legacy-live
 ```
 
-### Linux
+Do not run it unless you intentionally want to exercise the legacy OpenCode provider and accept any quota cost.
 
-Install Git and Node.js 18+ using your distribution package manager or Node installer, then:
+## Safety model
 
-```bash
-npm install -g opencode-ai@latest
-opencode --version
-```
+- Codex keeps user-request interpretation, authorization, consequential decisions, and final acceptance.
+- DSH owns bounded implementation, tests, routine fixes, and delivery. Its report is not acceptance by itself.
+- No commit, push, merge, deploy, production-data write, credential export, or unrelated-file change is authorized by delegation alone.
+- `scope_paths` bounds the assignment; it is not a security sandbox.
+- The controller records and cleans only the process group it started for the current turn, after checking the recorded PID/PGID relationship and, when available, the DSH command. It does not kill shared services or unrelated tabs.
+- The default state directory is private to the user; results and messages use restrictive permissions.
+- No Chrome cookies, credentials, DSH sessions, npm caches, or personal data are included in this repository.
 
-### Windows
+## Development and tests
 
-Install Git for Windows and Node.js 18+, open PowerShell, then:
-
-```powershell
-npm install -g opencode-ai@latest
-opencode --version
-```
-
-The bridge detects the Windows npm `opencode.cmd` launcher and runs it through `cmd.exe`. If OpenCode is installed somewhere unusual, set `OPENCODE_BIN` to the full `.cmd`, `.bat`, or executable path before starting Codex.
-
-OpenCode installation commands can change; check the [official OpenCode documentation](https://opencode.ai/docs/) if the npm command is no longer current.
-
-## Verify the installation
-
-In a new Codex task, ask:
-
-> Run the DeepSeek Code Agent prerequisite check and report the detected platform, Node, Git, OpenCode, provider, model, and reasoning variant.
-
-Or from this repository:
+The installable plugin is [`plugins/deepseek-code-agent`](./plugins/deepseek-code-agent). The repository root is also a Codex Git marketplace.
 
 ```bash
 npm --prefix plugins/deepseek-code-agent test
 npm --prefix plugins/deepseek-code-agent run check
 ```
 
-The live test performs one small provider request and may consume quota:
+`npm test` runs:
 
-```bash
-npm --prefix plugins/deepseek-code-agent run test:live
-```
+- the Python DSH suite: the eight interfaces, MCP framing, lifecycle and process cleanup, queue/message boundaries, pending questions, interrupt/timeout resume, context packet limits, scope traversal, install-relative/special-character paths, and output filtering;
+- the existing Node tests for the legacy OpenCode controller, verification, routing policy, MCP, and installation wiring.
 
-## Usage
+The CI matrix runs on Ubuntu, macOS, and Windows. Linux/macOS exercise the DSH Python lifecycle with a fake DSH executable; Windows exercises the explicit unsupported-platform preflight plus the parts that do not require POSIX process groups. No test calls a real model or a provider API. The legacy paid live test is never run by CI.
 
-Create a coding goal in Codex, or explicitly invoke the bundled Skill:
+Historical measurements are kept for auditability, not as current DSH evidence:
 
-```text
-/goal Implement the requested feature. Keep Codex as controller and delegate the bounded implementation to DeepSeek.
-```
+- [2026-09-14 token-routing benchmark](./docs/token-routing-benchmark-2026-09-14.md)
+- [2026-09-15 task-routing pilot](./docs/task-routing-pilot-2026-09-15.md)
+- [2026-09-15 reading-delegation retest](./docs/reading-delegation-retest-2026-09-15.md)
+- [Queen token efficiency protocol](./docs/queen-token-efficiency.md)
 
-```text
-Use $deepseek-coding-delegation to delegate this implementation and review the result.
-```
-
-To use the native low-cost lane without external credentials:
-
-```text
-Use Codex-native GPT-5.6 Luna with maximum reasoning for the bounded implementation. Do not use OpenCode or external provider credentials; Codex must review and verify the result.
-```
-
-For native Luna, Codex sends a bounded task and the necessary repository context through native delegation. For the OpenCode lane, Codex passes explicit `scope_paths`, task-specific `required_reads`, and compact `critical_constraints`. In both cases Codex independently reviews the resulting diff and tests.
-
-## Queen token efficiency
-
-### Route by expected benefit and task complexity
-
-Choose the route from expected queen work saved, risk, and exploration/verification burden, not line or file counts. **Small** known edits and tightly coupled reading or diagnosis stay with Codex by default, especially if review would repeat most of the investigation. **Medium** repetitive implementation or independent evidence batches are candidates for delegation when the labor removed from the queen is expected to outweigh dispatch, review and corrections within the time constraints. If that benefit is unclear, work directly; neither reading volume, a cheaper model nor extra parallel slots is sufficient, and no routing benchmark is required. Once delegation is justified, use Codex-native `gpt-5.6-luna` for bounded, low-risk native subtasks when available, including task-scoped correction loops and isolated worktree execution managed by Codex. Prefer the DeepSeek/GLM OpenCode worker when the user selects it or the task materially needs cross-task/restart discovery, controller-persisted state, OpenCode context forks, external-provider usage accounting, or persisted `task_spec` verification. **Large or high-risk** work — state machines, concurrency, permissions, transactions, migrations — may delegate only bounded labor to either lane. Codex keeps the interpretation of the user's request, consequential decisions, and final acceptance; before any code-changing delegation it checks the key contracts and design invariants that bound the implementation. When read-only delegation is justified, a full duplicate call-chain read is not required before dispatch. A worker's self-report or passing self-tests are never acceptance. An explicit per-task or fleet-wide model/lane choice overrides these defaults, and failures never authorize a silent cross-lane fallback.
-
-A 2026-09-15 pilot paired one direct and one delegated DeepSeek execution per size from the same commit: [task routing pilot](./docs/task-routing-pilot-2026-09-15.md). It did not test Luna. It ran one execution per cell in parallel without alternating order, so it is not the repeated benchmark the queen protocol asks for, and its numbers neither generalize nor promise a fixed saving. In that pilot, delegated worker non-cached input plus output was 13.78% below the three direct runs, while the controller's own interval was 55.41% below the direct proxy total; the controller interval also covers managing the direct Codex control arm and reviewing both runs, so it is not a pure delegation bill. Worker totals including cached reads were higher than direct totals, so combined tokens and latency can still increase; medium and large worker usage is marked incomplete.
-
-### Design, delegate, verify, review
-
-Codex keeps user-request interpretation, consequential design choices and final acceptance. When the routing decision supports delegation, a worker may first do bounded read-only discovery, indexing or document gathering. For example: “Read the relevant service and tests; return a scoped evidence packet with conclusions, file/test locations, short excerpts and anything you did not verify. Do not edit.” The packet identifies the scope/version it covers. Before code changes, Codex checks the key contracts and design invariants, then gives the implementation a bounded objective and acceptance cases. A native Luna subagent receives that task through Codex's native delegation path; an OpenCode worker can additionally receive a persisted `task_spec`, worktree and exact check commands. Routine reading and implementation do not need step-by-step reports. Escalate meaningful blockers and batch ordinary issues. Codex reviews the actual patch and independently checks risk-critical paths and gaps without repeating all exploration or accepting a summary on its own; the OpenCode correction lifecycle remains unchanged.
-
-`ds_verify_agent` runs only the persisted checks while the worker is idle, retaining exit codes and full logs. Verification is bound to the current source, Git index, task specification and instruction identity; edits invalidate earlier evidence. Repeated calls observe the same asynchronous job; `rerun=true` explicitly requests another execution. `ds_wait_agent(return_on="actionable")` absorbs transient retries and escalates a continuous 120-second retry streak. Use host-supported bounded waits: the 55-second wait and 65-second host timeout remain, and a timeout may require another bounded wait. Do not promise zero polling, restart-proof completion, or background wakeups. Existing calls without the new options keep their prior behavior.
-
-See the [task and evidence contract](plugins/deepseek-code-agent/skills/deepseek-coding-delegation/references/control-contract.md). The original implementation update was locally functionally tested without a model comparison at that time; any later dated pilot or retest is reported separately and must not be turned into a timeless claim.
-
-The default workflow reserves **queen (Codex) judgment** for intent, consequential design choices, uncertain diagnoses, risk-focused review and acceptance. Where delegation is justified, Luna or the OpenCode worker handles scoped discovery, editing, tests, routine fixes, documentation and evidence preparation. Selective reading, batching tool output and concise reporting also benefit direct Codex work and do not require a worker. The optimization target is the controller's total tokens (`input + output`); if reported input already includes cached input, do not add cached input again. Uncached input plus output is a separate proxy, and worker usage is reported separately; combined tokens and latency need not be lower. Delegate a coherent unit of work; reuse persistent OpenCode sessions for corrections, while native Luna gets a new subagent when its model selection changes. Do not delegate just because work is read-heavy; choosing a worker model does not require creating a worker.
-
-`ds_wait_agent` and `ds_inspect_agent` default to compact responses: status, attention requests, cumulative worker usage and a bounded final handoff. Task echoes, intermediate tool logs and repeated instruction manifests stay out of the queen's normal context. Use `detail="full"` for diagnosis or omitted evidence and `include_diff=true` when the diff is needed. Save the spawn manifest once and reuse returned cursors.
-
-Smaller tool responses are a measurable transport improvement, **not proof of end-to-end token savings**. The bridge cannot read the queen's usage. Compare matched direct/delegated tasks using actual queen usage, include failed attempts and review/correction turns, and keep worker tokens separate. See [the queen benchmark protocol](./docs/queen-token-efficiency.md).
-
-The [earlier 27-result synthetic benchmark](./docs/token-routing-benchmark-2026-09-14.md) measured combined Codex + DeepSeek tokens and found delegation more expensive at every task size. Those results remain valid for that setup; they do not establish the queen-only savings of this version. Combined tokens and latency may still increase.
-
-## Safety model
-
-- Codex owns scope, authorization, business decisions, review, verification, and goal completion.
-- Neither a native Luna subagent nor an OpenCode worker may commit, push, merge, deploy, alter production data, expose credentials, or discard unrelated changes without the user's authorization.
-- Native Luna uses Codex's built-in delegation path and must not receive OpenCode provider fields or external credentials. A lane failure never permits silent fallback to another model or provider.
-- Isolated worktrees start from committed `HEAD`; they do not include uncommitted files.
-- Instruction manifests identify the exact paths, hashes, and read scopes selected for the worker. They do not prove semantic compliance, so Codex must still review the patch.
-- The local OpenCode server binds to `127.0.0.1` and uses a random per-process password.
-
-## Development
-
-The installable plugin lives in [`plugins/deepseek-code-agent`](./plugins/deepseek-code-agent). The repository root is also a Codex Git marketplace.
-
-```bash
-npm --prefix plugins/deepseek-code-agent test
-python3 /path/to/plugin-creator/scripts/validate_plugin.py plugins/deepseek-code-agent
-```
-
-Tests run on Windows, macOS, and Linux in GitHub Actions. Provider-backed checks are intentionally excluded from public CI because credentials are never stored in the repository.
+Those documents describe their original OpenCode/Luna-era setups, single or limited runs, and stated limitations. They are not a DSH benchmark and do not promise token savings.
 
 ## License
 
