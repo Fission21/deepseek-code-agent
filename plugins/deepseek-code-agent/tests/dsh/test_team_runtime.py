@@ -8,7 +8,7 @@ import tempfile
 import time
 import unittest
 
-from support import SKILL as ROOT, POSIX_ONLY
+from support import SKILL as ROOT, POSIX_ONLY, watchdog_stopped
 sys.path.insert(0,str(ROOT/'scripts'))
 from agent_api import AgentAPI
 from scheduler import Scheduler, process_alive
@@ -56,9 +56,10 @@ class RuntimeTests(unittest.TestCase):
         until=time.monotonic()+8
         while time.monotonic()<until:
             with self.s.db() as db:pid=db.execute("SELECT value FROM settings WHERE key='daemon_pid'").fetchone()[0]
-            if not process_alive(pid,self.api.root):break
+            if not process_alive(pid,self.api.root) and watchdog_stopped(self.api.root):break
             time.sleep(.05)
         self.assertFalse(process_alive(pid,self.api.root),'Test scheduler did not stop')
+        self.assertTrue(watchdog_stopped(self.api.root),'Test watchdog did not stop')
         self.tmp.cleanup()
 
     def spec(self,name,delay=.25,**kw):

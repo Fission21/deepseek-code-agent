@@ -99,6 +99,16 @@ def wait_process_gone(pid, timeout=8):
     return wait_until(lambda: not process_alive(pid), timeout=timeout)
 
 
+def watchdog_stopped(root):
+    """The independent watchdog must exit before its registry is removed."""
+    try:
+        pid=read_json(Path(root)/'watchdog.json')['pid']
+    except FileNotFoundError:
+        return True
+    from watchdog import alive
+    return not alive(pid,root)
+
+
 class DSHTestCase(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="dsh test "))
@@ -145,8 +155,8 @@ class DSHTestCase(unittest.TestCase):
             def stopped():
                 with scheduler.db() as db:
                     pid = db.execute("SELECT value FROM settings WHERE key='daemon_pid'").fetchone()[0]
-                return not scheduler_alive(pid, self.root)
-            self.assertTrue(wait_until(stopped, timeout=8), "Test scheduler did not stop")
+                return not scheduler_alive(pid, self.root) and watchdog_stopped(self.root)
+            self.assertTrue(wait_until(stopped, timeout=8), "Test scheduler/watchdog did not stop")
         for key, value in self._old_env.items():
             if value is None:
                 os.environ.pop(key, None)
