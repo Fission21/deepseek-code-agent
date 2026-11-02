@@ -13,7 +13,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # ubuntu-latest is 26.04, where setup-python has no prebuilt 3.9.
+          # The official manifest provides 3.9.25 for Ubuntu 22.04 x64.
+          - os: ubuntu-22.04
             node: 18
             python: "3.9"
           - os: ubuntu-latest
