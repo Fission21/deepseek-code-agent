@@ -1,7 +1,7 @@
 {
   "name": "deepseek-code-agent",
-  "version": "0.2.0",
-  "description": "Delegate bounded work to local DeepSeek Harness (DSH) by default, with an explicit legacy OpenCode/Luna lane.",
+  "version": "0.3.0",
+  "description": "Explicit-only local DeepSeek Harness (DSH) delegation with concurrent teams and a separate legacy OpenCode/Luna lane.",
   "author": {
     "name": "Fission21",
     "url": "https://github.com/Fission21"
@@ -22,8 +22,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "DeepSeek Code Agent",
-    "shortDescription": "Default local DSH worker with an explicit legacy OpenCode lane.",
-    "longDescription": "Runs bounded coding, review, testing and browser work in a persistent local DeepSeek Harness session by default, with scoped context, corrections, pending questions, interruption and the current-Chrome huashu bridge. The older OpenCode ds_* controller remains available only when explicitly selected.",
+    "shortDescription": "Explicit DSH delegation with concurrent teams and persistent sessions.",
+    "longDescription": "When explicitly selected, runs coding, review, testing and browser tasks in persistent local DeepSeek Harness sessions. Supports global and per-team concurrency, dependency handoffs, peer messages, corrections and current-Chrome control. The older OpenCode ds_* lane also requires explicit selection.",
     "developerName": "Fission21",
     "category": "Developer Tools",
     "websiteURL": "https://github.com/Fission21/deepseek-code-agent",

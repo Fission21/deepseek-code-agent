@@ -1,6 +1,6 @@
 # Worker lanes, models and authentication
 
-> **Legacy OpenCode/Luna reference.** The default external lane is `$dsh-delegate`; this page is only for an explicitly selected legacy request. `npm run check` is the DSH preflight now; use `npm run check:legacy` for the checks below.
+> **Legacy OpenCode/Luna reference.** The separate DSH lane `$dsh-delegate` also requires explicit user selection; this page is only for an explicitly selected legacy request. `npm run check` is the DSH preflight now; use `npm run check:legacy` for the checks below.
 
 Read this for detailed model/default selection or scope changes, external authentication, or a missing model. An ordinary native Luna task with the explicit defaults in SKILL.md does not require this reference. The `ds_*` names and plugin ID remain unchanged for compatibility.
 

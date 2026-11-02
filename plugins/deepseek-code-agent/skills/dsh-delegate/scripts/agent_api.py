@@ -229,6 +229,51 @@ class AgentAPI:
             Path(name).unlink(missing_ok=True)
 
     def call(self, method, params):
+        if os.name != 'posix':
+            if method in ('list_agents', 'inspect_agent', 'wait_agent'):
+                return self._raw_call(method, params)
+            require_supported()
+        from scheduler import Scheduler, LIVE, READY
+        scheduler = Scheduler(self.root)
+        if method == 'create_team':
+            return scheduler.create_team(params)
+        if method == 'set_concurrency':
+            return scheduler.set_limit(params['limit'])
+        if method == 'set_team_concurrency':
+            return scheduler.set_team_limit(params['team_id'],params['limit'])
+        if method in ('inspect_team', 'wait_team'):
+            scheduler.kick()
+            until = time.monotonic() + (min(55, max(0,float(params.get('timeout_seconds',30)))) if method=='wait_team' else 0)
+            while True:
+                r=scheduler.inspect_team(params['team_id'],params.get('cursor',0))
+                if r['events'] or r['state']!='running' or time.monotonic()>=until:return r
+                time.sleep(.1)
+        if method in ('cancel_team', 'close_team', 'resume_task'):
+            team=scheduler.inspect_team(params['team_id'])
+            if method=='resume_task':
+                tasks=[t for t in team['tasks'] if t['name']==params['task_id']]
+                if not tasks:raise ValueError('Unknown task in team')
+                return scheduler.resume(tasks[0]['agent_id'],params['message'])
+            with scheduler.db(True) as db:
+                db.execute('UPDATE teams SET state=? WHERE id=?',('closed' if method=='close_team' else 'paused',params['team_id']))
+            scheduler.cancel([t['agent_id'] for t in team['tasks']],close=method=='close_team')
+            return scheduler.inspect_team(params['team_id'])
+        if method=='spawn_agent':
+            team=scheduler.create_team({'title':params.get('title',''),'tasks':[dict(params,id='task')]},legacy=True)
+            aid=team['tasks'][0]['agent_id']
+            return dict(snapshot(self.root/aid),team_id=team['team_id'])
+        task=scheduler.task(params.get('agent_id',''))
+        if not task and params.get('agent_id'):
+            task=scheduler.adopt_agent(params['agent_id'])
+        if task and method=='send_message':
+            return scheduler.deliver_message(task['agent_id'],params['message'])
+        if task and method in ('interrupt_agent','close_agent'):
+            scheduler.cancel([task['agent_id']],close=method=='close_agent')
+            return dict(snapshot(self.root/task['agent_id'],params.get('cursor')),task_status=scheduler.task(task['agent_id'])['status'])
+        if task:scheduler.kick()
+        return self._raw_call(method,params)
+
+    def _raw_call(self, method, params):
         if method == 'spawn_agent':
             require_supported()
             workspace = Path(params['workspace']).expanduser()
@@ -255,9 +300,11 @@ class AgentAPI:
             scopes = _string_list(params.get('scope_paths'), 'scope_paths')
             contexts = _string_list(params.get('context_files'), 'context_files', 30)
             reads = _string_list(params.get('required_reads'), 'required_reads', 30)
-            agent_id = 'dsh-' + uuid.uuid4().hex
+            agent_id = params.get('_agent_id') or 'dsh-' + uuid.uuid4().hex
             root = agent_path(self.root, agent_id)
             extra = ['--cwd', str(workspace.resolve()), '--controller-link', '--turn-timeout', str(timeout)]
+            if params.get('_defer'):
+                extra += ['--defer']
             for path in scopes:
                 extra += ['--allow-write', path]
             for path in contexts:

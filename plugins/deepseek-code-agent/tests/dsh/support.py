@@ -34,6 +34,10 @@ for index, arg in enumerate(argv):
     if arg == "--session-id" and index + 1 < len(argv):
         session_arg = argv[index + 1]
 mode = os.environ.get("FAKE_DSH_MODE", "complete")
+mode_file = os.environ.get("FAKE_DSH_MODE_FILE")
+if mode_file:
+    with open(mode_file, encoding="utf-8") as handle:
+        mode = handle.read().strip()
 log = os.environ.get("FAKE_DSH_LOG")
 if log:
     with open(log, "a", encoding="utf-8") as handle:
@@ -106,12 +110,15 @@ class DSHTestCase(unittest.TestCase):
         self.fake = install_fake(self.tmp / "fake dsh")
         self.log = self.tmp / "calls.jsonl"
         self.pidfile = self.tmp / "fake-pids.json"
+        self.mode_file = self.tmp / "fake-mode.txt"
+        self.mode_file.write_text("complete", encoding="utf-8")
         self.root = self.tmp / "agent state"
         self.agents = []
         self.cursors = {}
         self.env = {
             "FAKE_DSH_LOG": str(self.log),
             "FAKE_DSH_MODE": "complete",
+            "FAKE_DSH_MODE_FILE": str(self.mode_file),
             "FAKE_DSH_PIDFILE": str(self.pidfile),
             "PYTHONDONTWRITEBYTECODE": "1",
         }
@@ -129,6 +136,17 @@ class DSHTestCase(unittest.TestCase):
                 self.api.call("close_agent", {"agent_id": agent_id})
             except Exception:
                 pass
+        # The shared scheduler inherits its environment once. Keep the mutable
+        # fake mode in a fixture file, and let its final bookkeeping finish
+        # before the fixture's registry directory is removed.
+        if (self.root / "scheduler.sqlite3").exists():
+            from scheduler import Scheduler, process_alive as scheduler_alive
+            scheduler = Scheduler(self.root)
+            def stopped():
+                with scheduler.db() as db:
+                    pid = db.execute("SELECT value FROM settings WHERE key='daemon_pid'").fetchone()[0]
+                return not scheduler_alive(pid, self.root)
+            self.assertTrue(wait_until(stopped, timeout=8), "Test scheduler did not stop")
         for key, value in self._old_env.items():
             if value is None:
                 os.environ.pop(key, None)
@@ -137,6 +155,7 @@ class DSHTestCase(unittest.TestCase):
 
     def set_mode(self, mode):
         os.environ["FAKE_DSH_MODE"] = mode
+        self.mode_file.write_text(mode, encoding="utf-8")
 
     def spawn(self, mode="complete", timeout=20, **extra):
         self.set_mode(mode)

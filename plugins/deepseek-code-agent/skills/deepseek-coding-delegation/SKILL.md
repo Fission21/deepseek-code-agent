@@ -1,18 +1,18 @@
 ---
 name: deepseek-coding-delegation
-description: Legacy OpenCode/Luna delegation lane. Use only when the user explicitly asks for OpenCode, the ds_* tools, or GPT-5.6 Luna; the default external worker is $dsh-delegate and must not be replaced implicitly.
+description: Legacy OpenCode/Luna delegation lane. Use only when the user explicitly asks for OpenCode, the ds_* tools, or GPT-5.6 Luna; DSH is a separate explicit-only lane and must not be substituted implicitly.
 ---
 
 # DeepSeek Coding Delegation (legacy)
 
-> **Legacy, explicit-only lane.** The default external worker is `$dsh-delegate` (local DeepSeek Harness). This skill is not implicitly invoked. If the user selected DSH, never substitute OpenCode or Luna. Do not require or rerun the DSH test suite as a gate for this legacy lane; use its normal review and checks.
+> **Legacy, explicit-only lane.** The separate `$dsh-delegate` lane (local DeepSeek Harness) also requires explicit user selection. This skill is not implicitly invoked. If the user selected DSH, never substitute OpenCode or Luna. Do not require or rerun the DSH test suite as a gate for this legacy lane; use its normal review and checks.
 
 Reduce **queen (Codex) model tokens**, not its responsibility. The queen interprets the user's needs, decides consequential tradeoffs and accepts the result. Workers can spend more tokens on discovery, repetitive reading, implementation, tests, ordinary repairs and evidence preparation. Neither total-system savings nor quality follows automatically from delegation.
 
 ## Choose the work boundary
 
 - Honor an explicit direct/delegated choice. This skill applies only after the user explicitly selects OpenCode, `ds_*`, or native Luna; otherwise keep tiny known edits and tightly coupled reading or diagnosis with the queen, or use `$dsh-delegate`.
-- Do not use this skill to make an automatic delegation decision. If the user has not named this legacy lane, stop and use the default `$dsh-delegate` path instead.
+- Do not use this skill to make an automatic delegation decision. If the user has not named this legacy lane, continue the normal Codex workflow without implicitly selecting DSH.
 - If the user explicitly selected native `gpt-5.6-luna`, use it for that bounded work; if they explicitly selected OpenCode/`ds_*`, use that lane. Do not choose between them on the user's behalf and do not silently substitute either for a DSH request. Parallelize only genuinely independent work; more workers do not automatically save queen tokens.
 - OpenCode context forks, external-provider accounting and persisted `task_spec` verification are available only in this explicitly selected legacy lane.
 - For risky implementation (state machines, concurrency, permissions, transactions, migrations), the queen decides interfaces, invariants, failure semantics and acceptance before code changes. It may implement a difficult core itself and delegate surrounding labor; it is not limited to reviewing workers.

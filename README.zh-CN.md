@@ -2,40 +2,43 @@
 
 [English](./README.md) | 简体中文
 
-**v0.2.0 状态：** 本机 **DeepSeek Harness（DSH）** 是默认外部执行者。旧 OpenCode/Luna 通道仍保留，但只作为显式 legacy 选择；用户明确要求 DSH 时，安装本插件不会静默替换成 OpenCode 或 Luna。
+**v0.3.0 状态：** 本机 **DeepSeek Harness（DSH）** 仅在用户明确指定本次任务时启用，支持并发任务组。旧 OpenCode/Luna 通道仍保留，但只作为显式 legacy 选择；用户明确要求 DSH 时，安装本插件不会静默替换成 OpenCode 或 Luna。
 
-插件提供 `dsh_agents` MCP、`dsh-delegate` Skill 和当前 DSH 控制器实现：八个协作操作、持久会话、显式上下文包、`deepseek-official / deepseek-flash` + `max` 推理、可选的当前 Chrome huashu 链路，以及保留的旧 `deepseek_code_agent` MCP 与 `ds_*` 工具。
+插件提供 `dsh_agents` MCP、`dsh-delegate` Skill 和当前 DSH 控制器实现：16 个协作操作（八个单代理接口与八个团队/调度接口）、持久会话、显式上下文包、`deepseek-official / deepseek-flash` + `max` 推理、可选的当前 Chrome huashu 链路，以及保留的旧 `deepseek_code_agent` MCP 与 `ds_*` 工具。
 
 本仓库**不声称 DSH 有固定省 token 收益**。DSH 是外部独立持久会话，有自己的工具和历史；Codex 只发送主对话选择的上下文，不会自动继承 Codex 的全部私有工具、会话或聊天历史。仓库里的历史 benchmark 只属于其原始通道和设置，不是当前 DSH 的实测。
 
 ## 合作方式
 
 ```mermaid
-flowchart TD
-  U[用户目标] --> P[Codex 主对话：范围、授权、验收]
-  P --> S[spawn_agent：本机 DSH]
-  S --> W[DSH：在持久会话中实施、测试、修复、交付]
-  W --> Q{wait_agent：进度、提问或结果？}
-  Q -->|进度| P
-  Q -->|DSH 的普通阻塞问题| P
-  P -->|reply_agent：回答对应 request_id| W
-  P -->|send_message：纠偏或补充上下文| W
-  Q -->|仅缺少用户决定| H[询问用户]
-  H --> A[reply_agent：回答继续原执行]
-  A --> W
-  Q -->|结果或失败| V[主对话审阅实际改动与检查]
-  V --> C[DSH 清理本任务创建的资源]
-  C --> X[close_agent]
-  X --> D[交付]
+flowchart TB
+  U["用户明确指定 DSH"] --> P["Codex 主对话：目标、分工、并发、监督与纠偏"]
+  P <-->|"任务、上下文、进度、问题、结果"| I["dsh_agents MCP / JSON CLI"]
+  I <--> S["共享调度器：全局默认 2 路；各组独立限流"]
+  S <--> DB[("SQLite：额度、任务状态、修订与事件")]
+  S --- R["依赖就绪 + 文件/共享资源互斥；显示等待原因"]
+  S <-->|"派发、通信、交付"| EXEC
+  subgraph EXEC["DSH：DeepSeek Flash / max；每项任务一个持久会话"]
+    subgraph A["任务组 A：示例上限 2"]
+      A1["DSH A1：实现、测试、修复"] <-->|"同组消息"| A2["DSH A2：实现、测试、修复"]
+      A1 -->|"版本化交接"| A3["DSH A3：整合、联调、交付"]
+      A2 -->|"版本化交接"| A3
+    end
+    subgraph B["任务组 B：示例上限 1"]
+      B1["DSH B1：独立任务"]
+    end
+  end
+  EXEC --> T["代码、文件、终端；按任务分配范围"]
+  EXEC --> C["花叔 huashu-chrome：当前登录态；共享浏览器串行"]
 ```
 
 普通问题由主对话决定。DSH 通过 `ask_parent` 提出的问题要用 `reply_agent` 回答对应的 `request_id`；`send_message` 用于补充上下文或纠偏。只有任务中确实缺少的用户决定才问用户。DSH 负责实现、测试、修复和交付，主对话按项目正常标准审阅结果，不额外增加 DSH 专属的重复全套验证，也不要求主对话重跑 DSH 的每个测试。
 
 ## 包含内容
 
-- **`dsh_agents`**：默认 MCP，提供 `spawn_agent`、`send_message`、`wait_agent`、`inspect_agent`、`reply_agent`、`interrupt_agent`、`list_agents`、`close_agent`。
-- **`dsh-delegate`**：默认 Skill，覆盖 DSH 协作、当前 Chrome 和同一套八接口。
-- **DSH 运行时**：`worker.py`、`run_dsh.py`、`agent_api.py`、`context_packet.py`、`mcp_server.py`、controller link 和 `config/max.yml`，位于 `plugins/deepseek-code-agent/skills/dsh-delegate/`。
+- **`dsh_agents`**：显式选择 DSH 后使用，提供 `spawn_agent`、`send_message`、`wait_agent`、`inspect_agent`、`reply_agent`、`interrupt_agent`、`list_agents`、`close_agent`。
+- **`dsh-delegate`**：关闭隐式触发，覆盖 DSH 单代理/团队协作、当前 Chrome 和同一套 16 接口。
+- **DSH 运行时**：`scheduler.py`、`worker.py`、`run_dsh.py`、`agent_api.py`、`context_packet.py`、`mcp_server.py`、controller link 和 `config/max.yml`，位于 `plugins/deepseek-code-agent/skills/dsh-delegate/`。
 - **Legacy 通道**：原 OpenCode 控制器（`server.mjs`、`ds_*`）与旧 Skill 仍可用；旧 Skill 已关闭隐式触发。
 - **不打包凭据**：不含 API key、Codex/DSH 会话记录、npm 缓存、用户 Chrome 配置、cookie 或浏览数据。
 
@@ -102,7 +105,7 @@ DSH 安装位置特殊时，可在启动 Codex 前配置：
 4. `inspect_agent`：紧凑查看状态；方向错误时 `interrupt_agent`。
 5. `list_agents`：重启后恢复控制；协作结束时 `close_agent`。
 
-### 八个操作
+### 八个单代理操作
 
 | 操作 | 作用 |
 |---|---|
@@ -119,6 +122,23 @@ DSH 安装位置特殊时，可在启动 Codex 前配置：
 
 超时、中断和控制器错误会暂停会话，不会自动重放不确定的写入；后续 `send_message` 在同一会话中带明确纠正继续。待答问题最多等 180 秒，超时不是同意。
 
+### 并发任务组
+
+`create_team({title, max_parallel, tasks})` 将独立任务并行、依赖阶段接续。各任务沿用单代理参数，并增加 `id`、`depends_on`、`outputs` 和 `resources`。完整示例与约定见[并发任务组](plugins/deepseek-code-agent/skills/dsh-delegate/references/teams.md)。
+
+| 操作 | 作用 |
+|---|---|
+| `create_team` | 创建任务组，`max_parallel` 可选，省略则继承全局。 |
+| `inspect_team` / `wait_team` | 查看或等待全组进度、容量、结果和等待原因。 |
+| `resume_task` | 原会话返工或续接；上游返工使受影响下游过期。 |
+| `cancel_team` / `close_team` | 暂停全组 / 结束协作，按归属收尾执行。 |
+| `set_concurrency` | 调整跨聊天共享的全局上限，默认 2，范围 1–8。 |
+| `set_team_concurrency` | 仅调整本组上限；`null` 恢复继承。 |
+
+两个示例组共用全局额度，不能把 2 和 1 相加理解为同时运行 3 项。调高组上限后符合条件的任务启动；调低不会打断已运行任务。主对话根据独立工作数量、依赖和资源决定并发，不按难度评分自动扩容。
+
+组内 DSH 使用 `send_peer` 通信，完成时调用 `complete_task` 提交结果；下游在前置完成后接收摘要、修订和产物。`capacity` 与 `waiting_reasons` 直接解释资源/依赖/名额等待；`eligible_now` 是当前条件信息，不是名额预留。共享浏览器任务串行，文件范围是协作锁而非 OS 沙箱。
+
 ### 默认值与上下文
 
 - 模型：`deepseek-official` / `deepseek-flash`，推理 `max`，来自 `skills/dsh-delegate/config/max.yml`。
@@ -131,7 +151,7 @@ DSH 安装位置特殊时，可在启动 Codex 前配置：
 
 链路是 **DSH → huashu-chrome MCP → 本机共享 bridge → 用户 Chrome 扩展**。huashu-design 是设计技能，不提供该浏览器通道。
 
-`spawn_agent` 传入已分配的 `tab_id` 和预期 `url`。DSH 先 `learnings`，再 snapshot 该标签并核实身份，每次浏览器调用都带这个 tab ID。同一共享标签的操作串行执行；任务期间主对话不要操作该标签。
+`spawn_agent` 传入已分配的 `tab_id` 和预期 `url`。DSH 先 `learnings`，再 snapshot 该标签并核实身份，每次浏览器调用都带这个 tab ID。共享 Chrome 的浏览器任务串行执行，即使使用不同标签页；任务期间主对话不要操作该标签。
 
 登录态不等于授权。DSH 只能在用户明确授权的动作范围内使用已登录页面，不能仅因页面已登录就支付、发消息、删除数据或写业务记录。`allowSensitive` 只适用于已经明确授权的具体动作。遇到 `NO_EXTENSION` 应停止并等主对话确认重连；写入结果不明时先核对，绝不重复可能已完成的写操作。
 
@@ -178,7 +198,7 @@ npm --prefix plugins/deepseek-code-agent run check
 
 `npm test` 运行：
 
-- Python DSH 测试：八接口、MCP framing、生命周期与进程清理、队列/消息边界、待答问题、中断/超时续接、上下文包上限、越界 scope、安装相对路径/特殊字符路径、输出过滤；
+- Python DSH 测试：单代理/团队接口、并发额度与互斥、阶段交接和过期版本、同组消息、调度器恢复、MCP framing、生命周期与进程清理、队列/消息边界、待答问题、中断/超时续接、上下文包上限、越界 scope、安装相对路径/特殊字符路径、输出过滤；
 - 现有 Node 测试：旧 OpenCode 控制器、验证、路由策略、MCP 和安装接线。
 
 CI 在 Ubuntu、macOS、Windows 上运行。Linux/macOS 用假 DSH 覆盖 DSH Python 生命周期；Windows 覆盖明确的“不支持运行”预检，以及不依赖 POSIX 进程组的部分。测试不调用真实模型或 provider API；旧付费 live 测试不会进入 CI。

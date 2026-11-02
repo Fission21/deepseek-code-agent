@@ -46,6 +46,8 @@ class MCPFramingTests(unittest.TestCase):
         self.assertEqual(names, {
             "spawn_agent", "send_message", "wait_agent", "inspect_agent",
             "reply_agent", "interrupt_agent", "list_agents", "close_agent",
+            "create_team", "inspect_team", "wait_team", "resume_task",
+            "cancel_team", "close_team", "set_concurrency", "set_team_concurrency",
         })
         self.assertEqual(json.loads(by_id[3]["result"]["content"][0]["text"]), {"agents": []})
         self.assertEqual(by_id[None]["error"]["code"], -32700)

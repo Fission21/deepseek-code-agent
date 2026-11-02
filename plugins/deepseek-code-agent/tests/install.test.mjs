@@ -12,10 +12,10 @@ const plugin = JSON.parse(readFileSync(path.join(root, ".codex-plugin/plugin.jso
 const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
 const mcp = JSON.parse(readFileSync(path.join(root, ".mcp.json"), "utf8"));
 
-test("plugin defaults to DSH and keeps OpenCode as an explicit legacy server", () => {
-  assert.equal(plugin.version, "0.2.0");
-  assert.equal(pkg.version, "0.2.0");
-  assert.match(plugin.description, /DeepSeek Harness \(DSH\) by default/);
+test("plugin provides explicit-only DSH and a separate legacy server", () => {
+  assert.equal(plugin.version, "0.3.0");
+  assert.equal(pkg.version, "0.3.0");
+  assert.match(plugin.description, /Explicit-only local DeepSeek Harness \(DSH\)/);
   assert.deepEqual(Object.keys(mcp.mcpServers), ["dsh_agents", "deepseek_code_agent"]);
   assert.equal(mcp.mcpServers.dsh_agents.args[0], "./dsh-server.mjs");
   assert.equal(mcp.mcpServers.deepseek_code_agent.args[0], "./server.mjs");
@@ -28,14 +28,14 @@ test("plugin defaults to DSH and keeps OpenCode as an explicit legacy server", (
   assert.match(pkg.scripts.test, /test-all\.mjs/);
 });
 
-test("the DSH skill is implicit, while the legacy skill cannot steal routing", () => {
+test("both DSH and legacy skills require explicit user selection", () => {
   assert.ok(existsSync(path.join(root, "skills/dsh-delegate/SKILL.md")));
   assert.ok(existsSync(path.join(root, "skills/dsh-delegate/scripts/mcp_server.py")));
   assert.ok(existsSync(path.join(root, "skills/dsh-delegate/runtime/controller_link.mjs")));
   const legacy = readFileSync(path.join(root, "skills/deepseek-coding-delegation/agents/openai.yaml"), "utf8");
   assert.match(legacy, /allow_implicit_invocation:\s*false/);
   const dsh = readFileSync(path.join(root, "skills/dsh-delegate/agents/openai.yaml"), "utf8");
-  assert.doesNotMatch(dsh, /allow_implicit_invocation:\s*false/);
+  assert.match(dsh, /allow_implicit_invocation:\s*false/);
   const legacySkill = readFileSync(path.join(root, "skills/deepseek-coding-delegation/SKILL.md"), "utf8");
   assert.match(legacySkill, /Legacy, explicit-only lane/);
   assert.match(legacySkill, /\$dsh-delegate/);
@@ -79,7 +79,7 @@ test("the default dsh_agents MCP launcher answers initialize and tools/list", as
     const initialized = await waitFor((line) => line.id === 1);
     assert.equal(initialized.result.serverInfo.name, "dsh-agents");
     const listed = await waitFor((line) => line.id === 2);
-    assert.equal(listed.result.tools.length, 8);
+    assert.equal(listed.result.tools.length, 16);
   } finally {
     reader.close();
     if (child.exitCode === null && child.signalCode === null) {

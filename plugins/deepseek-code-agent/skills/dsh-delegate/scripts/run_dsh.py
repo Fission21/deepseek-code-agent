@@ -188,7 +188,11 @@ def main():
                     'mailbox': str(a.controller_mailbox),
                     'invocation': str(a.result_file),
                     'questionTimeoutMs': 180000,
+                    'workspace': str(a.cwd),
                 }
+                team_path = a.controller_mailbox.parent / 'team.json'
+                if team_path.is_file():
+                    link_config.update(json.loads(team_path.read_text()))
                 if runtime_root:
                     link_config['runtimeRoot'] = runtime_root
                 link.write_text(json.dumps([{'insert': [{
@@ -198,6 +202,8 @@ def main():
                 }]}]))
                 cmd += ['--patch', str(link)]
                 prompt += '\nYou are collaborating directly with a supervising Codex agent. Use message_parent for significant progress/findings and ask_parent only for genuinely missing decisions. Routine checks are your job; do not ask for repeated confirmation. Controller follow-ups will arrive automatically at model boundaries.\n'
+                if link_config.get('require_completion'):
+                    prompt += '\nThis is a scheduled team task. Complete your work and relevant checks, then call complete_task with outcome done, blocked, or failed and an honest concise summary. Use send_peer for useful findings addressed to a named teammate. You cannot create or widen tasks yourself.\n'
             if entry:
                 # JSON is YAML-compatible; no shell interpolation or credential copying.
                 overlay = Path(temp) / 'huashu.yml'

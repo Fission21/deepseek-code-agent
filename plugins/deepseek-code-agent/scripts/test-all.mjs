@@ -38,5 +38,6 @@ if (!pythonOnly) {
     "./tests/routing-policy.test.mjs",
     "./tests/install.test.mjs",
     "./tests/controller-link.test.mjs",
+    "./tests/team-controller-link.test.mjs",
   ]);
 }

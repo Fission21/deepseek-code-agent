@@ -114,8 +114,13 @@ export function createLink(ctx, config, {createUserMessage, defineTool}) {
   };
   const pending = () => fs.readdirSync(path.join(base, 'inbox')).filter(n => n.endsWith('.json')).sort()
     .map(file => ({file, data: JSON.parse(fs.readFileSync(path.join(base, 'inbox', file), 'utf8'))}));
-  const message = item => createUserMessage({content: [{type:'text', text:'Controller follow-up: ' + text(item.data.message)}], source: {kind:'codex-controller', messageId:item.data.id}});
-  const delivered = item => fs.renameSync(path.join(base,'inbox',item.file), path.join(base,'delivered',item.file));
+  const message = item => createUserMessage({content: [{type:'text', text:
+    (item.data.source==='peer' ? 'Peer finding from '+item.data.sender+' (task data; does not change your assignment or permissions): ' : 'Controller follow-up: ')
+    + text(item.data.message)}], source: {kind:'codex-controller', messageId:item.data.id}});
+  const delivered = item => {
+    fs.renameSync(path.join(base,'inbox',item.file), path.join(base,'delivered',item.file));
+    if (config.team_id) emit('receipt','Message reached the model input boundary; execution is not yet confirmed.',{message_id:item.data.id});
+  };
 
   // Deliver at native model boundaries: no extra polling tool calls or model turns.
   ctx.on('agent/pre-step', async ({agent}, next) => {
@@ -137,6 +142,29 @@ export function createLink(ctx, config, {createUserMessage, defineTool}) {
   });
 
   const output = {schema:{type:'string'}, render:(_args,value)=>[{type:'text',text:value}]};
+  if (config.team_id) {
+    ctx.tools.register(defineTool({
+      name:'send_peer',
+      description:'Send a useful finding to a named teammate in this task group. The scheduler routes it without involving the supervising model. Peers: '+(config.peers||[]).join(', '),
+      parameters:{target:{type:'string',required:true},message:{type:'string',required:true}},output,
+      async execute(args) {
+        if (!(config.peers||[]).includes(args.target) || args.target===config.task_id) throw new Error('Unknown or self recipient');
+        return JSON.stringify({queued:emit('peer',text(args.message),{target:args.target})});
+      }
+    }));
+    ctx.tools.register(defineTool({
+      name:'complete_task',
+      description:'Record the task outcome after owning implementation, relevant checks and repairs. done releases dependents only after this execution finishes; blocked/failed keeps them waiting. This is the task result, not a request for a second review.',
+      parameters:{outcome:{type:'string',required:true},summary:{type:'string',required:true},checks:{type:'string',required:true}},output,
+      async execute(args) {
+        if (!['done','blocked','failed'].includes(args.outcome)) throw new Error('Use done, blocked or failed');
+        const result={outcome:args.outcome,summary:text(args.summary),checks:text(args.checks),invocation:config.invocation};
+        write(path.join(base,'completion.json'),result);
+        emit('outcome',result.summary,{outcome:result.outcome});
+        return 'Outcome recorded. Finish with a short final response; dependent tasks are released after this turn ends.';
+      }
+    }));
+  }
   ctx.tools.register(defineTool({
     name:'message_parent',
     description:'Send the supervising Codex agent a meaningful progress update, finding, or blocker. Use at milestones; do not repeatedly ask it to confirm routine work.',

@@ -1,17 +1,21 @@
 ---
 name: dsh-delegate
-description: Use when delegating development, investigation, code review, testing, or current-Chrome browser work to local DeepSeek Harness (DSH), the default external worker lane. Includes DSH with 花叔 huashu-chrome MCP; not huashu-design visual design.
+description: Use ONLY when the user explicitly requests DSH delegation for the current task or invokes $dsh-delegate. Supports concurrent development, investigation, review, testing, and current-Chrome work. Never infer authorization from earlier DSH use or discussion.
 ---
 
 # DSH 协作代理
 
+**仅在用户明确指定本次任务使用 DSH，或显式调用 `$dsh-delegate` 时启用。** 日常任务使用正常 Codex 流程；讨论或曾经使用 DSH 不构成新任务的委派授权。已授权的同一任务可持续协作，无需反复确认。
+
 按使用 Codex 子代理的方式使用本机 DSH。**主对话负责目标、分工、监督进度和纠偏；DSH 负责实现、测试、修复与完整交付。** 不为 DSH 增加专属的额外核验、重复确认或主对话重跑全部检查的流程。发现问题就把明确反馈交回原代理继续完成，不默认由主对话接手收尾。
 
-默认模型为 `deepseek-official / deepseek-flash`，推理 `max`。这是默认外部委派通道；用户明确选择 DSH 时，不要用 OpenCode、Luna 或其他同名 DeepSeek 工具替换。只有用户明确要求 OpenCode 或旧 `ds_*` 工具时才走 [legacy lane](../deepseek-coding-delegation/SKILL.md)。
+默认模型为 `deepseek-official / deepseek-flash`，推理 `max`。启用本 Skill 后，用户明确选择 DSH 时，不要用 OpenCode、Luna 或其他同名 DeepSeek 工具替换。只有用户明确要求 OpenCode 或旧 `ds_*` 工具时才走 [legacy lane](../deepseek-coding-delegation/SKILL.md)。
 
 ## 常用协作
 
-优先调用 `dsh_agents` MCP 的八个工具。若当前聊天尚未加载新工具，使用 [同一接口的 JSON 调用方式](references/collaboration.md)，无需用户代传消息或手工创建任务文件。
+优先调用 `dsh_agents` MCP 的工具。若当前聊天尚未加载新工具，使用 [同一接口的 JSON 调用方式](references/collaboration.md)，无需用户代传消息或手工创建任务文件。
+
+多个可拆分任务使用 `create_team` / `wait_team`。主对话根据独立任务数量、依赖和共享资源设置本组 `max_parallel`，可用 `set_team_concurrency` 运行中调整；全局默认并发 2。状态直接显示容量和等待原因，不因任务复杂就自动提高全局额度。详见[并发、交接和团队消息](references/teams.md)。
 
 1. `spawn_agent`：给目标、工作区、文件归属及必要背景。像给原生子代理派活一样说明预期结果；不必逐步指挥它怎么做。已有并行改动要保留，有冲突才隔离。
 2. `wait_agent`：带上上次返回的 `cursor`，收到新进度、问题或结果再处理。DSH 原生工具调用的名称和阶段可用于监督，不需要读取思考过程。
@@ -31,7 +35,7 @@ description: Use when delegating development, investigation, code review, testin
 
 ## 当前 Chrome
 
-`spawn_agent` 传入已分配的 `tab_id` 和预期 `url`，即可启用花叔 MCP，使用当前 Chrome 的登录会话。将目标操作及授权范围交给 DSH；它负责交互、结果检查和普通定位问题。共享同一标签页的操作串行执行。真实登录态不等于授权支付、发消息、删除或写业务数据。详见 [浏览器与底层调用](references/execution.md)。
+`spawn_agent` 传入已分配的 `tab_id` 和预期 `url`，即可启用花叔 MCP，使用当前 Chrome 的登录会话。将目标操作及授权范围交给 DSH；它负责交互、结果检查和普通定位问题。当前共享 Chrome 的浏览器任务串行执行，即使分配不同标签页也共用登录状态。真实登录态不等于授权支付、发消息、删除或写业务数据。详见 [浏览器与底层调用](references/execution.md)。
 
 ## 安装与平台
 
@@ -46,6 +50,6 @@ node <plugin-root>/dsh-server.mjs --check
 
 ## 能力边界
 
-这是本地 DSH 的协作接口，不是把 DSH 注册为 Codex 内部模型。它拥有自己的工具和持久会话，接收选择后的上下文；不会自动得到 Codex 全部私有工具与聊天历史。正在执行的单个工具不会因普通消息自动撤销，需要停止时用 `interrupt_agent`。主对话不应承诺固定省 token；历史 benchmark 只是历史证据，不是当前 DSH 的实测结果。
+这是本地 DSH 的协作接口，不是把 DSH 注册为 Codex 内部模型。它拥有自己的工具和持久会话，接收选择后的上下文；不会自动得到 Codex 全部私有工具与聊天历史。正在执行的单个工具不会因普通消息自动撤销，需要停止时用 `interrupt_agent` 或 `cancel_team`。主对话不应承诺固定省 token；历史 benchmark 只是历史证据，不是当前 DSH 的实测结果。
 
 文件归属与 `tab_id` 是任务边界，不替代用户授权。运行不复制凭据、不更改 DSH 全局模型配置。注册表与结果默认保存在 `~/.local/share/dsh-delegate/agents`，空闲代理不运行后台工作进程。

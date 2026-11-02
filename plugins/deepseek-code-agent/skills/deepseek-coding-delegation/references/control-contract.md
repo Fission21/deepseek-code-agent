@@ -1,6 +1,6 @@
 # DeepSeek control contract
 
-> **Legacy OpenCode/Luna reference.** The default external lane is `$dsh-delegate`. Use this contract only after the user explicitly selects the legacy lane; it does not describe `dsh_agents`.
+> **Legacy OpenCode/Luna reference.** The separate DSH lane `$dsh-delegate` also requires explicit user selection. Use this contract only after the user explicitly selects the legacy lane; it does not describe `dsh_agents`.
 
 Read this reference when instruction routing, cursor recovery or a lifecycle edge case needs clarification.
 

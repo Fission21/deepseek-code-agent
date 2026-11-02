@@ -83,9 +83,10 @@ def launch(root):
     # Multiple launchers serialize on worker.lock. No idle polling service remains.
     require_supported()
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1')
-    subprocess.Popen([sys.executable, str(HERE / 'worker.py'), '_drain', '--state-dir', str(root)],
+    proc = subprocess.Popen([sys.executable, str(HERE / 'worker.py'), '_drain', '--state-dir', str(root)],
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      start_new_session=True, env=env)
+    threading.Thread(target=proc.wait, daemon=True).start()
 
 
 def _process_alive(pid):
@@ -503,6 +504,7 @@ def parse_args():
         if command in ('start', 'send'):
             p.add_argument('--task-file', required=True, type=Path)
             p.add_argument('--context-file', action='append', default=[])
+            p.add_argument('--defer', action='store_true', help=argparse.SUPPRESS)
         if command == 'start':
             p.add_argument('--cwd', required=True, type=Path)
             p.add_argument('--rule-file', action='append', default=[])
@@ -564,7 +566,8 @@ def main():
               'session_id': None, 'queue': [message], 'next_id': 2, 'completed_turns': 0,
               'active': None, 'inflight': None, 'controller_pid': None, 'last_result': None, 'last_event': None, 'paused': False,
               'closed': False, 'error': None})
-        launch(root)
+        if not args.defer:
+            launch(root)
     elif args.command == 'send':
         message = message_from(args)
         config = json.loads((root / 'config.json').read_text())
@@ -581,7 +584,8 @@ def main():
             state['error'] = None
             if not state['active']:
                 state['state'] = 'queued'
-        launch(root)
+        if not args.defer:
+            launch(root)
     elif args.command in ('stop', 'close'):
         with locked(root) as state:
             state['paused'] = True

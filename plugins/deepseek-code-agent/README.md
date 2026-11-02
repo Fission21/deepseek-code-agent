@@ -1,6 +1,6 @@
 # DeepSeek Code Agent for Codex
 
-Version 0.2.0. This plugin makes local **DeepSeek Harness (DSH)** the default external worker and keeps the previous OpenCode/Luna controller as an explicit legacy lane.
+Version 0.3.0. This plugin enables local **DeepSeek Harness (DSH)** only when explicitly selected for the current task and keeps the previous OpenCode/Luna controller as an explicit legacy lane.
 
 Full setup, platform status, security notes, and historical benchmark caveats are in the [repository README](../../README.md) ([中文](../../README.zh-CN.md)).
 
@@ -14,20 +14,25 @@ Full setup, platform status, security notes, and historical benchmark caveats ar
 ## Flow
 
 ```mermaid
-flowchart LR
-  A[User goal] --> B[Codex parent: scope and acceptance]
-  B --> C[spawn_agent: DSH]
-  C --> D[DSH implements, tests, fixes]
-  D --> E[wait_agent: progress or result]
-  E -->|ordinary blocking question| B
-  B -->|reply_agent answer| D
-  B -->|send_message correction or context| D
-  E -->|only missing user decision| U[Ask user]
-  U --> F[reply_agent]
-  F --> D
-  E -->|result| G[Parent reviews changes and checks]
-  G --> H[DSH cleans task resources]
-  H --> I[close_agent and deliver]
+flowchart TB
+  U["User explicitly selects DSH"] --> P["Codex parent: goals, ownership, concurrency, supervision"]
+  P <-->|"Tasks, context, progress, questions, results"| I["dsh_agents MCP / JSON CLI"]
+  I <--> S["Shared scheduler: global default 2; per-team ceilings"]
+  S <--> DB[("SQLite: capacity, task states, revisions, events")]
+  S --- R["Ready dependencies + exclusive resources; visible waiting reasons"]
+  S <-->|"Dispatch, messages, delivery"| EXEC
+  subgraph EXEC["DSH: DeepSeek Flash / max; one persistent session per task"]
+    subgraph A["Team A: example ceiling 2"]
+      A1["DSH A1: implement, test, repair"] <-->|"Peer messages"| A2["DSH A2: implement, test, repair"]
+      A1 -->|"Versioned handoff"| A3["DSH A3: integrate, test, deliver"]
+      A2 -->|"Versioned handoff"| A3
+    end
+    subgraph B["Team B: example ceiling 1"]
+      B1["DSH B1: independent task"]
+    end
+  end
+  EXEC --> T["Code, files, terminal: assigned task scope"]
+  EXEC --> C["huashu-chrome: current login; shared browser runs serially"]
 ```
 
 The parent decides ordinary issues. `ask_parent` questions are answered with `reply_agent`; `send_message` is for corrections or additional context. Only a genuinely missing user decision goes to the user. DSH owns implementation and routine fixes. Do not add a DSH-specific duplicate full verification pass.
@@ -58,7 +63,9 @@ npm run check:legacy
 
 ## Use
 
-Ask Codex to delegate to DSH, or explicitly invoke `$dsh-delegate`. The eight tools are `spawn_agent`, `send_message`, `wait_agent`, `inspect_agent`, `reply_agent`, `interrupt_agent`, `list_agents`, and `close_agent`.
+Ask Codex to delegate to DSH, or explicitly invoke `$dsh-delegate`. The eight single-agent tools are `spawn_agent`, `send_message`, `wait_agent`, `inspect_agent`, `reply_agent`, `interrupt_agent`, `list_agents`, and `close_agent`.
+
+For parallel work, use `create_team`, `inspect_team`, `wait_team`, `resume_task`, `cancel_team`, `close_team`, `set_concurrency`, and `set_team_concurrency`. Global concurrency defaults to 2; each team can set its own ceiling, still within the global limit. Raising or lowering it changes future dispatch without interrupting running tasks. [Team contract and example](skills/dsh-delegate/references/teams.md).
 
 - `scope_paths` is an assignment boundary, not an OS sandbox.
 - `context_files` / `required_reads` are explicit text only: 64 KiB per file, 160 KiB per packet; no credentials or private Codex session logs.
@@ -68,7 +75,7 @@ Ask Codex to delegate to DSH, or explicitly invoke `$dsh-delegate`. The eight to
 
 ## Browser
 
-The optional chain is DSH → huashu-chrome MCP → shared local bridge → the user's Chrome extension. Pass `tab_id` and `url` to `spawn_agent`; DSH verifies and uses that exact tab on every call. Shared-tab operations are serialized. Login state is not business authorization; do not pay, send, delete, or write data without the exact task authorization.
+The optional chain is DSH → huashu-chrome MCP → shared local bridge → the user's Chrome extension. Pass `tab_id` and `url` to `spawn_agent`; DSH verifies and uses that exact tab on every call. All shared-Chrome tasks are serialized, including different tabs. Login state is not business authorization; do not pay, send, delete, or write data without the exact task authorization.
 
 ## Legacy lane
 
@@ -88,4 +95,4 @@ npm run test:dsh  # Python DSH suite only
 npm run test:node # Node/OpenCode tests only
 ```
 
-The DSH tests use a fake DSH executable and do not call a model. They cover the eight interfaces, MCP framing, lifecycle/process cleanup, queue and message boundaries, pending questions, interrupt/timeout resume, context limits, scope traversal, install-relative and special-character paths, and output filtering.
+The DSH tests use a fake DSH executable and do not call a model. They cover single-agent/team interfaces, concurrency limits, resource exclusion, dependency handoffs, peer messages, scheduler recovery, MCP framing, lifecycle/process cleanup, queue and message boundaries, pending questions, interrupt/timeout resume, context limits, scope traversal, install-relative and special-character paths, and output filtering.

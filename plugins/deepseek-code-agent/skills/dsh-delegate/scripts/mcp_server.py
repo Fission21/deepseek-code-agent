@@ -36,7 +36,7 @@ def tool(name, description, properties, required=(), readonly=False):
 
 
 TOOLS = [
-    tool('spawn_agent', 'Delegate a development, investigation, review, test, or browser task to a local DSH agent. This is the default external worker lane: DeepSeek Flash with max reasoning owns implementation, tests, fixes and delivery. Returns immediately; use wait_agent for messages and results. Project AGENTS.md rules load natively.', {
+    tool('spawn_agent', 'Delegate a development, investigation, review, test, or browser task to a local DSH agent. Use only when the user explicitly selects DSH: DeepSeek Flash with max reasoning owns implementation, tests, fixes and delivery. Returns immediately; use wait_agent for messages and results. Project AGENTS.md rules load natively.', {
         'task': dict(LONG_STRING, description='Goal, context, ownership and expected result, as for a native subagent'),
         'workspace': dict(STRING, description='Absolute existing working directory'),
         'title': {'type': 'string', 'maxLength': 200},
@@ -70,6 +70,29 @@ TOOLS = [
         **AGENT, **CURSOR,
     }, ('agent_id',)),
 ]
+TEAM = {'team_id': STRING}
+TASK_SCHEMA = {'type':'object','properties':{
+    **TOOLS[0]['inputSchema']['properties'],
+    'id':dict(STRING,description='Unique short task name within this team'),
+    'depends_on':{'type':'array','items':STRING,'description':'Task names that must deliver done before this starts'},
+    'outputs':{'type':'array','items':STRING,'description':'Expected workspace-relative output files, versioned for dependents'},
+    'resources':{'type':'array','items':STRING,'description':'Exclusive shared resource names, for example a test tenant or database'}
+},'required':['id','task','workspace'],'additionalProperties':False}
+TOOLS += [
+    tool('create_team','Start explicitly authorized DSH tasks as a team. Independent tasks run concurrently; dependencies and resource conflicts are scheduled automatically. Default global concurrency is 2. DSH workers own their testing, repairs and complete_task delivery.',
+         {'title':STRING,'max_parallel':{'type':'integer','minimum':1,'maximum':8,'description':'Optional per-team ceiling within the global limit; omitted means inherit global. Choose based on independent work, not difficulty alone.'},'tasks':{'type':'array','items':TASK_SCHEMA,'minItems':1,'maxItems':32}},('tasks',)),
+    tool('inspect_team','Read team tasks, results, capacity, waiting reasons and new events without waiting. eligible_now describes current constraints, not a reservation or an artifact integrity check.',{**TEAM,'cursor':{'type':'integer','minimum':0}},('team_id',),True),
+    tool('wait_team','Wait for changes from any task in this team, without one wait call per worker. Returns progress, peer messages, questions and results.',
+         {**TEAM,'cursor':{'type':'integer','minimum':0},'timeout_seconds':{'type':'number','minimum':0,'maximum':55}},('team_id',),True),
+    tool('resume_task','Continue a stopped or finished team task in the same DSH session. Give the correction to its existing owner. Revising an upstream task invalidates already executed descendants.',
+         {**TEAM,'task_id':STRING,'message':STRING},('team_id','task_id','message')),
+    tool('cancel_team','Pause this team and stop its owned executions. Session history remains available for resume_task.',TEAM,('team_id',)),
+    tool('close_team','Finish this team, stop owned executions and retain results. It cannot be resumed.',TEAM,('team_id',)),
+    tool('set_concurrency','Set the global DSH execution limit for this shared registry across chats. Reducing it lets running jobs finish and delays new starts.',
+         {'limit':{'type':'integer','minimum':1,'maximum':8}},('limit',)),
+    tool('set_team_concurrency','Adjust only this team ceiling within the global limit. Null restores inheritance. Lowering it does not stop running tasks. Prefer this to changing capacity for other chats.',
+         {**TEAM,'limit':{'type':['integer','null'],'minimum':1,'maximum':8}},('team_id','limit'))
+]
 TOOL_NAMES = {item['name'] for item in TOOLS}
 
 
@@ -82,9 +105,9 @@ def dispatch(api, request):
         return {
             'protocolVersion': version,
             'capabilities': {'tools': {}},
-            'serverInfo': {'name': 'dsh-agents', 'version': '0.2.0'},
+            'serverInfo': {'name': 'dsh-agents', 'version': '0.3.0'},
             'instructions': (
-                'Use DSH as the default collaborating worker. Lead, send corrections and answer '
+                'Use DSH only when the user explicitly requests this collaborating worker. Lead, send corrections and answer '
                 'questions; DSH owns implementation, testing and repairs. No DSH-specific second '
                 'verification workflow is required. Legacy ds_* tools are a separate explicit lane.'
             ),
@@ -120,12 +143,14 @@ def serve(api):
             print(json.dumps(response, ensure_ascii=False), flush=True)
 
     # A waiting call must not block a concurrent reply or interrupt.
-    with ThreadPoolExecutor(max_workers=16) as executor:
+    with ThreadPoolExecutor(max_workers=8) as executor, ThreadPoolExecutor(max_workers=4) as waiters:
         for line in sys.stdin:
             try:
                 request = json.loads(line)
                 if isinstance(request, dict) and 'id' in request:
-                    executor.submit(respond, request)
+                    name=request.get('params',{}).get('name')
+                    pool=waiters if request.get('method')=='tools/call' and name in ('wait_agent','wait_team') else executor
+                    pool.submit(respond, request)
             except ValueError:
                 with output_lock:
                     print(json.dumps({'jsonrpc': '2.0', 'id': None, 'error': {'code': -32700, 'message': 'Invalid JSON'}}), flush=True)

@@ -1,6 +1,6 @@
 interface:
   display_name: "DeepSeek Coding Delegation (legacy)"
-  short_description: "Explicit-only legacy OpenCode/Luna lane; DSH is the default external worker"
+  short_description: "Explicit-only legacy OpenCode/Luna lane; DSH is a separate explicit-only lane"
   default_prompt: "Use $deepseek-coding-delegation only for an explicitly selected legacy OpenCode or Luna lane, preserving review and verification."
 policy:
   allow_implicit_invocation: false

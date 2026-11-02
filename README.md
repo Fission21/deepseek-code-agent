@@ -2,40 +2,43 @@
 
 English | [简体中文](./README.zh-CN.md)
 
-**v0.2.0 status:** local **DeepSeek Harness (DSH)** is the default external worker. The older OpenCode/Luna lane is still shipped, but only as an explicit legacy choice. Installing this plugin does not silently substitute OpenCode or Luna when the user asks for DSH.
+**v0.3.0 status:** local **DeepSeek Harness (DSH)** is enabled only when the user explicitly selects it for the current task, with concurrent team support. The older OpenCode/Luna lane is still shipped, but only as an explicit legacy choice. Installing this plugin does not silently substitute OpenCode or Luna when the user asks for DSH.
 
-The plugin gives Codex a `dsh_agents` MCP server, a `dsh-delegate` Skill, and the current DSH controller implementation: eight collaboration operations, persistent sessions, selected-context packets, the `deepseek-official / deepseek-flash` model with `max` reasoning, optional current-Chrome control through huashu-chrome, and the legacy `deepseek_code_agent` MCP with its original `ds_*` tools.
+The plugin gives Codex a `dsh_agents` MCP server, a `dsh-delegate` Skill, and the current DSH controller implementation: 16 collaboration operations (eight single-agent and eight team/scheduler operations), persistent sessions, selected-context packets, the `deepseek-official / deepseek-flash` model with `max` reasoning, optional current-Chrome control through huashu-chrome, and the legacy `deepseek_code_agent` MCP with its original `ds_*` tools.
 
 There is **no claim of fixed token savings** for DSH. DSH is an external, independently persistent session with its own tools and history. Codex sends only the context the parent selects; DSH does not automatically inherit all private Codex tools, sessions, or conversation history. Older benchmark documents in this repository remain historical evidence for their original lanes and setups, not measurements of the current DSH lane.
 
 ## How collaboration works
 
 ```mermaid
-flowchart TD
-  U[User goal] --> P[Codex parent: scope, authorization, acceptance]
-  P --> S[spawn_agent: local DSH]
-  S --> W[DSH: implement, test, fix, deliver in a persistent session]
-  W --> Q{wait_agent: progress, question, or result?}
-  Q -->|progress| P
-  Q -->|ordinary blocking question| P
-  P -->|reply_agent: answer the request| W
-  P -->|send_message: correction or context| W
-  Q -->|only a genuinely missing user decision| H[Ask the user]
-  H --> A[reply_agent: answer resumes the same execution]
-  A --> W
-  Q -->|result or failure| V[Parent reviews actual changes and checks]
-  V --> C[DSH cleans resources it created for this task]
-  C --> X[close_agent]
-  X --> D[Delivery]
+flowchart TB
+  U["User explicitly selects DSH"] --> P["Codex parent: goals, ownership, concurrency, supervision"]
+  P <-->|"Tasks, context, progress, questions, results"| I["dsh_agents MCP / JSON CLI"]
+  I <--> S["Shared scheduler: global default 2; per-team ceilings"]
+  S <--> DB[("SQLite: capacity, task states, revisions, events")]
+  S --- R["Ready dependencies + exclusive resources; visible waiting reasons"]
+  S <-->|"Dispatch, messages, delivery"| EXEC
+  subgraph EXEC["DSH: DeepSeek Flash / max; one persistent session per task"]
+    subgraph A["Team A: example ceiling 2"]
+      A1["DSH A1: implement, test, repair"] <-->|"Peer messages"| A2["DSH A2: implement, test, repair"]
+      A1 -->|"Versioned handoff"| A3["DSH A3: integrate, test, deliver"]
+      A2 -->|"Versioned handoff"| A3
+    end
+    subgraph B["Team B: example ceiling 1"]
+      B1["DSH B1: independent task"]
+    end
+  end
+  EXEC --> T["Code, files, terminal: assigned task scope"]
+  EXEC --> C["huashu-chrome: current login; shared browser runs serially"]
 ```
 
 The parent decides ordinary questions and corrections. A DSH `ask_parent` question is answered with `reply_agent` for that `request_id`; `send_message` is for additional context or a correction. Only a decision genuinely missing from the task goes to the user. DSH owns implementation, tests, fixes, and delivery; the parent reviews the result with the project's normal standards. Do not add a DSH-specific second full verification suite or force the parent to repeat every DSH test.
 
 ## What is included
 
-- **`dsh_agents`** — default MCP server exposing `spawn_agent`, `send_message`, `wait_agent`, `inspect_agent`, `reply_agent`, `interrupt_agent`, `list_agents`, and `close_agent`.
-- **`dsh-delegate`** — default Skill for DSH collaboration, current-Chrome work, and the same eight-operation contract.
-- **DSH runtime** — `worker.py`, `run_dsh.py`, `agent_api.py`, `context_packet.py`, `mcp_server.py`, the controller link, and `config/max.yml` under `plugins/deepseek-code-agent/skills/dsh-delegate/`.
+- **`dsh_agents`** — explicitly selected DSH MCP server exposing `spawn_agent`, `send_message`, `wait_agent`, `inspect_agent`, `reply_agent`, `interrupt_agent`, `list_agents`, and `close_agent`.
+- **`dsh-delegate`** — explicit-only Skill for single-agent/team collaboration, current-Chrome work, and the same 16-operation contract.
+- **DSH runtime** — `scheduler.py`, `worker.py`, `run_dsh.py`, `agent_api.py`, `context_packet.py`, `mcp_server.py`, the controller link, and `config/max.yml` under `plugins/deepseek-code-agent/skills/dsh-delegate/`.
 - **Legacy lane** — the existing OpenCode controller (`server.mjs`, `ds_*` tools) and legacy Skill remain available for explicit OpenCode/Luna requests. The legacy Skill has implicit invocation disabled.
 - **No bundled credentials** — no API keys, DSH/Codex session records, npm cache, user Chrome profile, cookies, or browser data.
 
@@ -102,7 +105,7 @@ The parent typically calls:
 4. `inspect_agent` for a compact status check, and `interrupt_agent` when the direction is wrong.
 5. `list_agents` to recover control after a restart, and `close_agent` when the collaboration ends.
 
-### The eight operations
+### The eight single-agent operations
 
 | Operation | Purpose |
 |---|---|
@@ -119,6 +122,23 @@ The parent typically calls:
 
 Timeout, interrupt, and controller errors pause the session; they do not automatically replay an uncertain write. A later `send_message` resumes the same session with a clear correction. Pending questions wait up to 180 seconds; a timeout is not consent.
 
+### Concurrent teams
+
+`create_team({title, max_parallel, tasks})` runs independent tasks concurrently and releases later stages after their dependencies finish. Tasks retain the single-agent parameters and add `id`, `depends_on`, `outputs`, and `resources`. See the [team reference](plugins/deepseek-code-agent/skills/dsh-delegate/references/teams.md) for the complete contract and example.
+
+| Operation | Purpose |
+|---|---|
+| `create_team` | Create a team; optional `max_parallel` inherits the global ceiling when omitted. |
+| `inspect_team` / `wait_team` | Inspect or wait for team progress, capacity, results, and waiting reasons. |
+| `resume_task` | Continue or revise the original session; upstream revisions invalidate affected descendants. |
+| `cancel_team` / `close_team` | Pause the team / end collaboration and stop owned executions. |
+| `set_concurrency` | Set the global ceiling shared across chats: default 2, configurable from 1 to 8. |
+| `set_team_concurrency` | Change only this team's ceiling; `null` restores inheritance. |
+
+The example teams share the global ceiling: their limits of 2 and 1 do not permit three simultaneous executions. Raising a team ceiling releases eligible queued work; lowering it lets running work finish. The parent chooses capacity from independent work, dependencies, and resource constraints, without a difficulty-scoring model or automatic global expansion.
+
+Team workers use `send_peer` to communicate and `complete_task` to deliver outcomes. Dependents receive completed summaries, revisions, and artifacts. `capacity` and `waiting_reasons` explain resource, dependency, or slot waits; `eligible_now` is a snapshot, not a slot reservation. Shared browser tasks run serially. File ownership is a coordination lock, not an OS sandbox.
+
 ### Defaults and context
 
 - Model: `deepseek-official` / `deepseek-flash`, reasoning `max`, from `skills/dsh-delegate/config/max.yml`.
@@ -131,7 +151,7 @@ Timeout, interrupt, and controller errors pause the session; they do not automat
 
 The browser chain is **DSH → huashu-chrome MCP → local shared bridge → the user's Chrome extension**. huashu-design is a design skill and does not provide this browser channel.
 
-Pass an existing `tab_id` and its expected `url` to `spawn_agent`. DSH calls `learnings`, snapshots that exact tab, verifies identity, and passes the tab ID on every browser call. Operations on one shared tab are serialized. The parent must not operate that tab during the task.
+Pass an existing `tab_id` and its expected `url` to `spawn_agent`. DSH calls `learnings`, snapshots that exact tab, verifies identity, and passes the tab ID on every browser call. All tasks using the shared Chrome environment are serialized, even when they use different tabs. The parent must not operate that tab during the task.
 
 Login state is not authorization. A DSH task may use the existing signed-in page only within the actions the user authorized; it may not pay, send messages, delete data, or write business records merely because the tab is logged in. `allowSensitive` applies only to a specific action already authorized. On `NO_EXTENSION`, stop and wait for the parent to confirm reconnection; on an uncertain write, verify before any retry and never repeat a possibly completed write.
 
@@ -178,7 +198,7 @@ npm --prefix plugins/deepseek-code-agent run check
 
 `npm test` runs:
 
-- the Python DSH suite: the eight interfaces, MCP framing, lifecycle and process cleanup, queue/message boundaries, pending questions, interrupt/timeout resume, context packet limits, scope traversal, install-relative/special-character paths, and output filtering;
+- the Python DSH suite: single-agent/team interfaces, concurrency ceilings and resource exclusion, versioned dependency handoffs, peer messages, scheduler recovery, MCP framing, lifecycle and process cleanup, queue/message boundaries, pending questions, interrupt/timeout resume, context packet limits, scope traversal, install-relative/special-character paths, and output filtering;
 - the existing Node tests for the legacy OpenCode controller, verification, routing policy, MCP, and installation wiring.
 
 The CI matrix runs on Ubuntu, macOS, and Windows. Linux/macOS exercise the DSH Python lifecycle with a fake DSH executable; Windows exercises the explicit unsupported-platform preflight plus the parts that do not require POSIX process groups. No test calls a real model or a provider API. The legacy paid live test is never run by CI.
